@@ -58,7 +58,7 @@ services:
     container_name: iot-api
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8001:8000"
     depends_on:
       - influxdb
     environment:
