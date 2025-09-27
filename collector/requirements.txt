@@ -1,0 +1,5 @@
+paho-mqtt==1.6.1
+influxdb-client==1.38.0
+pyyaml==6.0.1
+python-json-logger==2.0.7
+tenacity==8.2.3

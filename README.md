@@ -21,10 +21,9 @@ This project creates a complete IoT monitoring solution using:
 
 ## Current Device Status
 
-**Shelly Pro 2 (192.168.2.12):**
+**Shelly Pro 2:**
 - Model: SPSW-202XE12UL
 - Firmware: 1.6.2
-- MAC: 8813BFDDBFE8
 - Bluetooth: ✅ Enabled
 - MQTT: ⚠️ Not configured
 

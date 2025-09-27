@@ -1,0 +1,37 @@
+mqtt:
+  broker: "mosquitto"
+  port: 1883
+  keepalive: 60
+  topics:
+    - "shellypro2-+/events/rpc"
+    - "shellypro2-+/online"
+    - "shellybluh&t-+/info"
+  qos: 1
+
+influxdb:
+  url: "http://influxdb:8086"
+  token: "iot-admin-token-12345"
+  org: "iot-org"
+  bucket: "sensor-data"
+  timeout: 10
+
+logging:
+  level: "INFO"
+  format: "json"
+
+processing:
+  batch_size: 100
+  flush_interval: 10  # seconds
+  retry_attempts: 3
+  retry_backoff: 2.0
+
+sensors:
+  temperature:
+    unit: "celsius"
+    precision: 1
+  humidity:
+    unit: "percent"
+    precision: 1
+  battery:
+    unit: "percent"
+    precision: 0

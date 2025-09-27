@@ -44,7 +44,7 @@ This system implements a complete IoT monitoring pipeline for temperature and hu
 
 #### Shelly Pro 2 (BT Gateway)
 - **Model**: SPSW-202XE12UL
-- **IP**: 192.168.2.12
+- **IP**: <DEVICE_IP>
 - **Function**: BLE to MQTT bridge
 - **Current Status**:
   - Firmware: 1.6.2
@@ -55,7 +55,7 @@ This system implements a complete IoT monitoring pipeline for temperature and hu
 
 #### MQTT Broker (Mosquitto)
 - **Function**: Message routing and buffering
-- **Topics**: `shellypro2-8813bfddbfe8/events/rpc` (estimated)
+- **Topics**: `shellypro2-<DEVICE_ID>/events/rpc` (estimated)
 - **QoS**: Level 1 (at least once delivery)
 - **Retention**: Configurable
 
@@ -108,9 +108,9 @@ This system implements a complete IoT monitoring pipeline for temperature and hu
 ## Network Configuration
 
 ### Current Network
-- Subnet: 192.168.2.0/24
-- Shelly Pro 2: 192.168.2.12
-- Docker Host: 192.168.2.x (TBD)
+- Subnet: <LOCAL_SUBNET>
+- Shelly Pro 2: <DEVICE_IP>
+- Docker Host: <HOST_IP>
 
 ### Port Allocation
 - MQTT: 1883 (internal), 1883 (external)
