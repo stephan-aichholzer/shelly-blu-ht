@@ -3,9 +3,9 @@ mqtt:
   port: 1883
   keepalive: 60
   topics:
-    - "shellypro2-+/events/rpc"
-    - "shellypro2-+/online"
-    - "shellybluh&t-+/info"
+    - "+/events/rpc"
+    - "+/online"
+    - "+/info"
   qos: 1
 
 influxdb:

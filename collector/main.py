@@ -99,8 +99,9 @@ class DataCollector:
 
         # Test connection
         try:
-            buckets = self.influx_client.buckets_api().find_buckets()
-            self.logger.info(f"Connected to InfluxDB, found {len(buckets)} buckets")
+            # Simple ping to test connection
+            health = self.influx_client.ping()
+            self.logger.info(f"Connected to InfluxDB successfully, health: {health}")
         except Exception as e:
             self.logger.error(f"InfluxDB connection test failed: {e}")
             raise
@@ -113,8 +114,12 @@ class DataCollector:
             self.logger.info("Connected to MQTT broker")
             # Subscribe to topics
             for topic in self.config["mqtt"]["topics"]:
-                client.subscribe(topic, self.config["mqtt"]["qos"])
-                self.logger.info(f"Subscribed to topic: {topic}")
+                try:
+                    self.logger.info(f"Attempting to subscribe to topic: '{topic}'")
+                    result = client.subscribe(topic, self.config["mqtt"]["qos"])
+                    self.logger.info(f"Subscribed to topic: {topic}, result: {result}")
+                except Exception as e:
+                    self.logger.error(f"Failed to subscribe to topic '{topic}': {e}")
         else:
             self.logger.error(f"Failed to connect to MQTT broker, return code {rc}")
 

@@ -67,6 +67,19 @@ services:
       - INFLUXDB_ORG=iot-org
       - INFLUXDB_BUCKET=sensor-data
 
+  # Mockup Sensors (for testing without real hardware)
+  mockup-sensors:
+    build: ./mockup-sensors
+    container_name: iot-mockup-sensors
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+    environment:
+      - MQTT_BROKER=mosquitto
+      - MQTT_PORT=1883
+    profiles:
+      - mockup  # Only start when 'mockup' profile is used
+
 volumes:
   influxdb-data:
   influxdb-config:

@@ -314,8 +314,83 @@ async def get_latest_readings():
 
 @app.get("/metrics", response_class=PlainTextResponse, summary="Prometheus Metrics")
 async def metrics():
-    """Prometheus metrics endpoint"""
+    """Prometheus metrics endpoint - updates gauges with latest values"""
+    # Update Prometheus gauges with latest sensor data before serving metrics
+    await update_prometheus_metrics()
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+async def update_prometheus_metrics():
+    """Update Prometheus gauges with latest sensor values from database"""
+    try:
+        # Get latest temperature readings for all sensors
+        temp_query = '''
+        from(bucket: "sensor-data")
+          |> range(start: -5m)
+          |> filter(fn: (r) => r["_measurement"] == "temperature")
+          |> group(columns: ["gateway_id", "sensor_id"])
+          |> last()
+        '''
+
+        temp_result = query_api.query(temp_query, org=INFLUXDB_ORG)
+
+        for table in temp_result:
+            for record in table.records:
+                gateway_id = record.values.get("gateway_id", "unknown")
+                sensor_id = record.values.get("sensor_id", "unknown")
+                value = record.get_value()
+
+                SENSOR_TEMPERATURE.labels(
+                    device_id=gateway_id,
+                    sensor_id=sensor_id
+                ).set(value)
+
+        # Get latest humidity readings
+        humidity_query = '''
+        from(bucket: "sensor-data")
+          |> range(start: -5m)
+          |> filter(fn: (r) => r["_measurement"] == "humidity")
+          |> group(columns: ["gateway_id", "sensor_id"])
+          |> last()
+        '''
+
+        humidity_result = query_api.query(humidity_query, org=INFLUXDB_ORG)
+
+        for table in humidity_result:
+            for record in table.records:
+                gateway_id = record.values.get("gateway_id", "unknown")
+                sensor_id = record.values.get("sensor_id", "unknown")
+                value = record.get_value()
+
+                SENSOR_HUMIDITY.labels(
+                    device_id=gateway_id,
+                    sensor_id=sensor_id
+                ).set(value)
+
+        # Get latest battery readings
+        battery_query = '''
+        from(bucket: "sensor-data")
+          |> range(start: -5m)
+          |> filter(fn: (r) => r["_measurement"] == "battery")
+          |> group(columns: ["gateway_id", "sensor_id"])
+          |> last()
+        '''
+
+        battery_result = query_api.query(battery_query, org=INFLUXDB_ORG)
+
+        for table in battery_result:
+            for record in table.records:
+                gateway_id = record.values.get("gateway_id", "unknown")
+                sensor_id = record.values.get("sensor_id", "unknown")
+                value = record.get_value()
+
+                SENSOR_BATTERY.labels(
+                    device_id=gateway_id,
+                    sensor_id=sensor_id
+                ).set(value)
+
+    except Exception as e:
+        # Log error but don't fail the metrics endpoint
+        print(f"Error updating Prometheus metrics: {e}")
 
 if __name__ == "__main__":
     import uvicorn
