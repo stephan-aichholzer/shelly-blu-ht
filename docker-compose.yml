@@ -1,20 +1,6 @@
 version: '3.8'
 
 services:
-  # MQTT Broker
-  mosquitto:
-    image: eclipse-mosquitto:2.0
-    container_name: iot-mosquitto
-    restart: unless-stopped
-    ports:
-      - "1883:1883"
-      - "9001:9001"
-    volumes:
-      - ./mosquitto/config:/mosquitto/config
-      - ./mosquitto/data:/mosquitto/data
-      - ./mosquitto/log:/mosquitto/log
-    command: mosquitto -c /mosquitto/config/mosquitto.conf
-
   # Time Series Database
   influxdb:
     image: influxdb:2.7
@@ -34,24 +20,6 @@ services:
       - influxdb-data:/var/lib/influxdb2
       - influxdb-config:/etc/influxdb2
 
-  # Data Collector Service
-  collector:
-    build: ./collector
-    container_name: iot-collector
-    restart: unless-stopped
-    depends_on:
-      - mosquitto
-      - influxdb
-    environment:
-      - MQTT_BROKER=mosquitto
-      - MQTT_PORT=1883
-      - INFLUXDB_URL=http://influxdb:8086
-      - INFLUXDB_TOKEN=iot-admin-token-12345
-      - INFLUXDB_ORG=iot-org
-      - INFLUXDB_BUCKET=sensor-data
-    volumes:
-      - ./collector/config.yaml:/app/config.yaml
-
   # Python API with Prometheus Metrics
   api:
     build: ./api
@@ -67,18 +35,21 @@ services:
       - INFLUXDB_ORG=iot-org
       - INFLUXDB_BUCKET=sensor-data
 
-  # Mockup Sensors (for testing without real hardware)
-  mockup-sensors:
-    build: ./mockup-sensors
-    container_name: iot-mockup-sensors
+  # Sensor Poller (polls real BLU H&T sensors via HTTP)
+  sensor-poller:
+    build: ./sensor-poller
+    container_name: iot-sensor-poller
     restart: unless-stopped
     depends_on:
-      - mosquitto
+      - influxdb
     environment:
-      - MQTT_BROKER=mosquitto
-      - MQTT_PORT=1883
-    profiles:
-      - mockup  # Only start when 'mockup' profile is used
+      - SHELLY_IP=192.168.2.12
+      - INFLUXDB_URL=http://192.168.2.11:8086
+      - INFLUXDB_TOKEN=iot-admin-token-12345
+      - INFLUXDB_ORG=iot-org
+      - INFLUXDB_BUCKET=sensor-data
+      - POLL_INTERVAL=30
+    network_mode: host  # Needed to access Shelly on local network
 
 volumes:
   influxdb-data:

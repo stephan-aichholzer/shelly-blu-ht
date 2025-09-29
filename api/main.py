@@ -17,10 +17,10 @@ from pydantic import BaseModel
 # Prometheus metrics
 REQUEST_COUNT = Counter('api_requests_total', 'Total API requests', ['method', 'endpoint'])
 REQUEST_DURATION = Histogram('api_request_duration_seconds', 'API request duration')
-SENSOR_TEMPERATURE = Gauge('sensor_temperature_celsius', 'Current temperature', ['device_id', 'sensor_id'])
-SENSOR_HUMIDITY = Gauge('sensor_humidity_percent', 'Current humidity', ['device_id', 'sensor_id'])
-SENSOR_BATTERY = Gauge('sensor_battery_percent', 'Current battery level', ['device_id', 'sensor_id'])
-SENSOR_LAST_SEEN = Gauge('sensor_last_seen_timestamp', 'Last seen timestamp', ['device_id', 'sensor_id'])
+SENSOR_TEMPERATURE = Gauge('sensor_temperature_celsius', 'Current temperature', ['device_id', 'sensor_id', 'sensor_name'])
+SENSOR_HUMIDITY = Gauge('sensor_humidity_percent', 'Current humidity', ['device_id', 'sensor_id', 'sensor_name'])
+SENSOR_BATTERY = Gauge('sensor_battery_percent', 'Current battery level', ['device_id', 'sensor_id', 'sensor_name'])
+SENSOR_LAST_SEEN = Gauge('sensor_last_seen_timestamp', 'Last seen timestamp', ['device_id', 'sensor_id', 'sensor_name'])
 
 app = FastAPI(
     title="IoT Temperature Monitoring API",
@@ -337,11 +337,13 @@ async def update_prometheus_metrics():
             for record in table.records:
                 gateway_id = record.values.get("gateway_id", "unknown")
                 sensor_id = record.values.get("sensor_id", "unknown")
+                sensor_name = record.values.get("sensor_name", "unknown")
                 value = record.get_value()
 
                 SENSOR_TEMPERATURE.labels(
                     device_id=gateway_id,
-                    sensor_id=sensor_id
+                    sensor_id=sensor_id,
+                    sensor_name=sensor_name
                 ).set(value)
 
         # Get latest humidity readings
@@ -359,11 +361,13 @@ async def update_prometheus_metrics():
             for record in table.records:
                 gateway_id = record.values.get("gateway_id", "unknown")
                 sensor_id = record.values.get("sensor_id", "unknown")
+                sensor_name = record.values.get("sensor_name", "unknown")
                 value = record.get_value()
 
                 SENSOR_HUMIDITY.labels(
                     device_id=gateway_id,
-                    sensor_id=sensor_id
+                    sensor_id=sensor_id,
+                    sensor_name=sensor_name
                 ).set(value)
 
         # Get latest battery readings
@@ -381,11 +385,13 @@ async def update_prometheus_metrics():
             for record in table.records:
                 gateway_id = record.values.get("gateway_id", "unknown")
                 sensor_id = record.values.get("sensor_id", "unknown")
+                sensor_name = record.values.get("sensor_name", "unknown")
                 value = record.get_value()
 
                 SENSOR_BATTERY.labels(
                     device_id=gateway_id,
-                    sensor_id=sensor_id
+                    sensor_id=sensor_id,
+                    sensor_name=sensor_name
                 ).set(value)
 
     except Exception as e:
