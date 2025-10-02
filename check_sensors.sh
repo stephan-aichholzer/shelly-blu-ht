@@ -29,12 +29,16 @@ check_sensor() {
     # Get sensor values based on sensor ID mapping
     # Device 200: temp=202, humidity=201, battery=200
     # Device 201: temp=205, humidity=204, battery=203
+    # Device 202: temp=208, humidity=207, battery=206
     if [ "$sensor_id" = "200" ]; then
         temp_sensor_id=202
         humidity_sensor_id=201
-    else
+    elif [ "$sensor_id" = "201" ]; then
         temp_sensor_id=205
         humidity_sensor_id=204
+    else
+        temp_sensor_id=208
+        humidity_sensor_id=207
     fi
 
     # Get temperature
@@ -86,9 +90,10 @@ check_sensor() {
     echo ""
 }
 
-# Check both sensors
+# Check all sensors
 check_sensor 200 "temp_outdoor"
 check_sensor 201 "temp_indoor"
+check_sensor 202 "temp_buffer"
 
 echo "=== Notes ==="
 echo "- BLU H&T sensors broadcast every 1 minute"

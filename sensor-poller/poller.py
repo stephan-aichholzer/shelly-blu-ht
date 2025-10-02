@@ -37,6 +37,14 @@ SENSORS = [
         "battery_sensor_id": 203,
         "humidity_sensor_id": 204,
         "temperature_sensor_id": 205
+    },
+    {
+        "device_id": 202,
+        "name": "temp_buffer",
+        "mac": "7c:c6:b6:ae:c2:31",
+        "battery_sensor_id": 206,
+        "humidity_sensor_id": 207,
+        "temperature_sensor_id": 208
     }
 ]
 

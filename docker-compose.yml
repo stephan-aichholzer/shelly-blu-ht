@@ -14,7 +14,7 @@ services:
       - DOCKER_INFLUXDB_INIT_PASSWORD=iottemp123
       - DOCKER_INFLUXDB_INIT_ORG=iot-org
       - DOCKER_INFLUXDB_INIT_BUCKET=sensor-data
-      - DOCKER_INFLUXDB_INIT_RETENTION=30d
+      - DOCKER_INFLUXDB_INIT_RETENTION=180d
       - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=iot-admin-token-12345
     volumes:
       - influxdb-data:/var/lib/influxdb2
