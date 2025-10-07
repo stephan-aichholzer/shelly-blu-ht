@@ -34,6 +34,18 @@ services:
       - INFLUXDB_TOKEN=iot-admin-token-12345
       - INFLUXDB_ORG=iot-org
       - INFLUXDB_BUCKET=sensor-data
+      - SHELLY_IP=192.168.2.12
+      - SWITCH_ID=0
+      - THERMOSTAT_CONFIG_FILE=/data/thermostat_config.json
+    volumes:
+      - ./data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Allows container to reach host network for Shelly
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # Sensor Poller (polls real BLU H&T sensors via HTTP)
   sensor-poller:

@@ -1,377 +1,453 @@
-# Architecture Documentation
+# Architecture v3.0 - Thermostat Control System
 
-## System Overview
+## Overview
 
-The Shelly BT Temperature Monitoring System is a lightweight IoT solution for collecting and visualizing temperature and humidity data from Shelly BLU H&T Bluetooth sensors.
+Version 3.0 extends the v2.0 HTTP polling architecture with intelligent thermostat control capabilities, transforming the system from a passive monitoring solution into an active environmental control system.
 
-## Architecture Diagram
+## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Physical Layer                            │
-│  Shelly BLU H&T Sensors (Bluetooth Low Energy)              │
-│  - temp_outdoor: 7c:c6:b6:ab:66:13                          │
-│  - temp_indoor:  94:b2:16:0b:88:01                          │
-└──────────────────────┬──────────────────────────────────────┘
-                       │ Bluetooth (1-minute broadcasts)
-                       ↓
-┌─────────────────────────────────────────────────────────────┐
-│                   Gateway Layer                              │
-│  Shelly Pro 2 (SPSW-202XE12UL)                              │
-│  - Receives BT broadcasts from sensors                       │
-│  - Exposes sensor data via HTTP REST API                     │
-│  - IP: 192.168.2.12                                          │
-└──────────────────────┬──────────────────────────────────────┘
-                       │ HTTP polling (every 30 seconds)
-                       ↓
-┌─────────────────────────────────────────────────────────────┐
-│              Data Collection Layer                           │
-│  Sensor Poller (Python)                                      │
-│  - Polls Shelly REST API: /rpc/BTHomeSensor.GetStatus       │
-│  - Polls Shelly REST API: /rpc/BTHomeDevice.GetStatus       │
-│  - Collects: temperature, humidity, battery, RSSI            │
-│  - Enriches data with sensor names                           │
-└──────────────────────┬──────────────────────────────────────┘
-                       │ Direct write
-                       ↓
-┌─────────────────────────────────────────────────────────────┐
-│                  Storage Layer                               │
-│  InfluxDB 2.7 (Time-Series Database)                         │
-│  - Bucket: sensor-data                                       │
-│  - Retention: 30 days                                        │
-│  - Tags: gateway_id, sensor_id, sensor_name, sensor_type    │
-│  - Fields: temperature, humidity, battery                    │
-└──────────────────────┬──────────────────────────────────────┘
-                       │ Query
-                       ↓
-┌─────────────────────────────────────────────────────────────┐
-│                 API Layer                                    │
-│  FastAPI + Prometheus                                        │
-│  - REST API: /api/v1/sensors, /temperature, /humidity       │
-│  - Prometheus metrics: /metrics                              │
-│  - Real-time metric updates on scrape                        │
-│  - Port: 8001                                                │
-└──────────────────────┬──────────────────────────────────────┘
-                       │ HTTP scraping
-                       ↓
-┌─────────────────────────────────────────────────────────────┐
-│              Visualization Layer                             │
-│  Prometheus + Grafana (User-configured)                      │
-│  - Scrapes /metrics endpoint                                 │
-│  - Dashboards with sensor_name labels                        │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                    Hardware Layer                                 │
+├─────────────────────────────────────────────────────────────────┤
+│  Shelly BLU H&T Sensors (BT)  →  Shelly Pro 2 (Gateway+Switch)  │
+│  • temp_outdoor (200)                                            │
+│  • temp_indoor (201) ← Used for control                         │
+│  • temp_buffer (202)                                             │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓ HTTP/RPC
+┌─────────────────────────────────────────────────────────────────┐
+│                   Data Collection Layer                          │
+├─────────────────────────────────────────────────────────────────┤
+│  Sensor Poller (every 30s)                                      │
+│  • Polls Shelly BTHomeDevice.GetStatus                          │
+│  • Writes to InfluxDB (temp, humidity, battery)                 │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│                    Storage Layer                                 │
+├─────────────────────────────────────────────────────────────────┤
+│  InfluxDB                                                        │
+│  • Time-series sensor data                                      │
+│  • Historical analysis                                           │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓ Query
+┌─────────────────────────────────────────────────────────────────┐
+│                   Control Layer (NEW in v3.0)                    │
+├─────────────────────────────────────────────────────────────────┤
+│  FastAPI + Thermostat Control Loop (every 60-600s configurable) │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │ 1. Query InfluxDB for last N temperature samples         │  │
+│  │ 2. Calculate moving average                              │  │
+│  │ 3. Apply control logic:                                  │  │
+│  │    - Hysteresis (symmetric deadband)                     │  │
+│  │    - Minimum ON/OFF time constraints                     │  │
+│  │    - Mode-based decisions (AUTO/ECO/ON/OFF)             │  │
+│  │ 4. Execute switch control via Shelly RPC                 │  │
+│  │ 5. Log decision and update state                         │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓ HTTP/RPC
+┌─────────────────────────────────────────────────────────────────┐
+│                    Output Layer                                  │
+├─────────────────────────────────────────────────────────────────┤
+│  • Shelly Pro 2 Switch Control                                  │
+│  • Prometheus Metrics (/metrics)                                │
+│  • REST API (thermostat config/status)                          │
+│  • OpenAPI Documentation (/docs)                                │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## Design Decisions
+## Key Design Decisions
 
-### v2.0: HTTP Polling Architecture
+### 1. Temperature Averaging (NEW)
 
-**Decision:** Use simple HTTP polling instead of MQTT message broker.
+**Problem:** Slow-responding heating systems (underfloor heating, large radiators) require stable temperature readings to avoid oscillation.
 
-**Rationale:**
+**Solution:** Configurable moving average of last N samples.
 
-#### Why We Chose HTTP Polling
-
-1. **Simplicity**
-   - No message broker (Mosquitto) to configure
-   - No complex topic patterns or subscriptions
-   - Standard HTTP requests that everyone understands
-   - Fewer moving parts = fewer failure points
-
-2. **Reliability**
-   - Direct request-response pattern
-   - Immediate error feedback
-   - No message queue overflow issues
-   - No "lost message" scenarios
-
-3. **Easier Debugging**
-   - Can test with `curl` or browser
-   - Standard HTTP status codes
-   - Clear request/response logs
-   - No message broker logs to correlate
-
-4. **Less Infrastructure**
-   - 3 services instead of 5
-   - ~200MB less memory usage
-   - Simpler docker-compose configuration
-   - Fewer ports to expose
-
-5. **Appropriate Scale**
-   - 2 sensors updating every 30 seconds
-   - ~60 HTTP requests per hour
-   - No need for pub/sub scalability
-   - Perfect for small-scale IoT
-
-#### Why We Initially Considered MQTT
-
-- Sounds modern and "IoT-appropriate"
-- Good for large-scale sensor networks (100+ devices)
-- Efficient for unreliable networks
-- Push-based updates feel more "real-time"
-
-#### Why We Abandoned MQTT
-
-- **Over-engineering** for 2 sensors
-- Shelly Pro 2 doesn't natively publish sensor data to MQTT
-- Would require custom scripting on Shelly (complex, fragile)
-- Added significant complexity without benefit
-- MQTT broker = additional service to maintain
-
-### Key Architecture Principles
-
-1. **Keep It Simple**: Choose the simplest solution that works
-2. **Pragmatic Over Clever**: HTTP polling is boring, but it works
-3. **Less Infrastructure**: Fewer services = easier maintenance
-4. **Standard Protocols**: HTTP is universal and well-understood
-5. **Direct Data Flow**: Minimize hops between source and storage
-
-## Component Details
-
-### Sensor Poller
-
-**Technology:** Python 3.11
-
-**Responsibilities:**
-- Poll Shelly Pro 2 HTTP API every 30 seconds
-- Query sensor values for each paired BLU H&T device
-- Enrich data with human-readable sensor names
-- Write directly to InfluxDB
-
-**Key Features:**
-- Configurable poll interval
-- Automatic sensor discovery via configuration
-- Error handling and retry logic
-- Structured logging
-
-**Configuration:**
 ```python
-SENSORS = [
-    {
-        "device_id": 200,              # Shelly device ID
-        "name": "temp_outdoor",        # Human-readable name
-        "mac": "7c:c6:b6:ab:66:13",   # MAC address (for tagging)
-        "temperature_sensor_id": 202,  # BTHomeSensor component ID
-        "humidity_sensor_id": 201,     # BTHomeSensor component ID
-        "battery_sensor_id": 200       # BTHomeSensor component ID
-    }
-]
+# Query last N samples from InfluxDB
+samples = query_temperature(sensor="temp_indoor", limit=N)
+
+# Calculate average
+avg_temp = sum(samples) / len(samples)
+
+# Use averaged temperature for control decisions
 ```
 
-### InfluxDB
+**Benefits:**
+- Reduces noise from sensor variations
+- Prevents rapid on/off cycling
+- Configurable sample count (1-10, default: 3)
+- Adapts to system thermal response time
 
-**Version:** 2.7
+### 2. Control Loop Architecture
 
-**Configuration:**
-- **Bucket:** sensor-data
-- **Retention:** 30 days
-- **Org:** iot-org
+**Background Task:** Async control loop runs continuously as FastAPI background task.
 
-**Schema:**
-```
-Measurement: temperature
-  Tags:
-    - gateway_id: shellypro2-8813bfddbfe8
-    - sensor_id: 7c:c6:b6:ab:66:13
-    - sensor_name: temp_outdoor
-    - sensor_type: bthome
-  Fields:
-    - value: 9.6 (float)
-  Timestamp: 2025-09-29T19:42:00Z
+```python
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(thermostat_control_loop())
 
-Measurement: humidity
-  [same tags]
-  Fields:
-    - value: 72.0 (float)
-
-Measurement: battery
-  [same tags]
-  Fields:
-    - level: 100 (integer)
+async def thermostat_control_loop():
+    while True:
+        execute_control_logic()
+        await asyncio.sleep(control_interval)  # Default: 180s
 ```
 
-### FastAPI Service
+**Why Background Task:**
+- ✅ Runs independently of API requests
+- ✅ No external scheduler needed (cron, etc.)
+- ✅ Survives API restarts automatically
+- ✅ Easy to monitor and health-check
+- ✅ Logs integrated with main API logs
 
-**Technology:** Python 3.11 + FastAPI + prometheus_client
+### 3. Control Logic
 
-**Endpoints:**
+**Hysteresis Control (Symmetric Deadband):**
 
-**REST API:**
-- `GET /health` - Service health check
-- `GET /api/v1/sensors` - List all sensors with metadata
-- `GET /api/v1/temperature?sensor_id=...&limit=...` - Temperature data
-- `GET /api/v1/humidity?sensor_id=...&limit=...` - Humidity data
-- `GET /api/v1/battery?sensor_id=...&limit=...` - Battery levels
-
-**Prometheus Metrics:**
-- `GET /metrics` - Prometheus exposition format
-
-**Metrics Exposed:**
 ```
-sensor_temperature_celsius{device_id, sensor_id, sensor_name}
-sensor_humidity_percent{device_id, sensor_id, sensor_name}
-sensor_battery_percent{device_id, sensor_id, sensor_name}
+Temperature Zones:
+
+     │<────── Hysteresis ──────>│<────── Hysteresis ──────>│
+     │                                                        │
+ ────┴────────────────────────┬───────────────────────────┴────
+
+     Turn ON               Deadband              Turn OFF
+  (< target - h)      (maintain state)       (>= target + h)
 ```
 
-**Key Feature:** Metrics are refreshed from InfluxDB on each scrape, ensuring Grafana always sees current values.
+**Example with target=22°C, hysteresis=0.5°C:**
+- Turn ON when: temp < 21.5°C (and timing allows)
+- Turn OFF when: temp >= 22.5°C (and timing allows)
+- Deadband (21.5-22.5°C): Maintain current state
 
-## Data Flow
+**Timing Constraints:**
+- `min_on_time`: Minimum minutes to keep switch ON (prevents short heating bursts)
+- `min_off_time`: Minimum minutes to keep switch OFF (prevents rapid cycling)
 
-### Normal Operation
+**Control Decision Logic:**
 
-1. **Sensor Broadcast** (every 1 minute)
-   - BLU H&T sensor broadcasts BTHome packet via Bluetooth
-   - Shelly Pro 2 receives and stores latest values
+```python
+def calculate_control_decision(temp, target, hysteresis,
+                               current_state, last_change_time,
+                               min_on_time, min_off_time):
 
-2. **HTTP Polling** (every 30 seconds)
-   - Poller queries `/rpc/BTHomeSensor.GetStatus?id=202` (temperature)
-   - Poller queries `/rpc/BTHomeSensor.GetStatus?id=201` (humidity)
-   - Poller queries `/rpc/BTHomeDevice.GetStatus?id=200` (device info)
+    turn_on_threshold = target - hysteresis
+    turn_off_threshold = target + hysteresis
+    time_since_change = now - last_change_time
 
-3. **Data Enrichment**
-   - Poller adds sensor_name tag
-   - Poller adds gateway_id tag
-   - Formats data as InfluxDB Line Protocol
+    # In deadband - maintain current state
+    if turn_on_threshold <= temp < turn_off_threshold:
+        return current_state
 
-4. **Storage**
-   - Write to InfluxDB bucket with tags and timestamp
-   - Data persisted with 30-day retention
+    # Below threshold - want to turn ON
+    if temp < turn_on_threshold:
+        if current_state == ON:
+            return ON  # Already on
+        else:
+            # Check minimum OFF time elapsed
+            if time_since_change >= min_off_time:
+                return ON  # Can turn on now
+            else:
+                return OFF  # Still locked off
 
-5. **Metrics Export**
-   - Prometheus scrapes `/metrics` endpoint (typically every 15s)
-   - API queries InfluxDB for latest values
-   - API updates Prometheus gauges
-   - Metrics returned to Prometheus
+    # Above threshold - want to turn OFF
+    if temp >= turn_off_threshold:
+        if current_state == OFF:
+            return OFF  # Already off
+        else:
+            # Check minimum ON time elapsed
+            if time_since_change >= min_on_time:
+                return OFF  # Can turn off now
+            else:
+                return ON  # Still locked on
+```
 
-6. **Visualization**
-   - Grafana queries Prometheus
-   - User creates dashboards with PromQL
-   - Real-time graphs display sensor data
+### 4. Operating Modes
 
-## Deployment
+**AUTO Mode:**
+- Uses `target_temp` setpoint
+- Full control logic active
+- Typical use: Normal operation
 
-### Docker Services
+**ECO Mode:**
+- Uses `eco_temp` setpoint (typically lower, e.g., 18°C)
+- Full control logic active
+- Typical use: Away from home, vacation mode
+
+**ON Mode:**
+- Forces switch permanently ON
+- Ignores temperature readings
+- Manual override
+- Typical use: Emergency heating, testing
+
+**OFF Mode:**
+- Forces switch permanently OFF
+- Ignores temperature readings
+- Manual override
+- Typical use: Summer, maintenance
+
+### 5. Persistent State Management
+
+**Configuration Storage:**
+```
+Host: ./data/thermostat_config.json
+Container: /data/thermostat_config.json
+```
+
+**Structure:**
+```json
+{
+  "config": {
+    "target_temp": 22.0,
+    "eco_temp": 18.0,
+    "mode": "AUTO",
+    "hysteresis": 0.5,
+    "min_on_time": 30,
+    "min_off_time": 10,
+    "temp_sample_count": 3,
+    "control_interval": 180
+  },
+  "state": {
+    "switch_on": false,
+    "last_switch_change": "2025-10-07T18:00:00Z",
+    "last_control_decision": "..."
+  }
+}
+```
+
+**Why JSON File:**
+- ✅ Human-readable and editable
+- ✅ Survives container restarts
+- ✅ Can be edited directly on host
+- ✅ No database complexity
+- ✅ Easily backed up
+- ✅ Version control friendly
+
+### 6. Health Monitoring & Auto-Recovery
+
+**Docker Healthcheck:**
+```dockerfile
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD curl -f http://localhost:8000/health | grep -q '"status":"healthy"'
+```
+
+**Health Checks:**
+1. **InfluxDB Connection:** Can query sensor data?
+2. **Shelly Connection:** Can reach switch controller?
+3. **Control Loop:** Running and recent execution?
+4. **Error State:** No consecutive failures?
+
+**Auto-Recovery:**
+```
+Health Check Fails × 3 (90 seconds)
+         ↓
+Docker marks container unhealthy
+         ↓
+Docker restarts container (restart: unless-stopped)
+         ↓
+Container starts with persisted config
+         ↓
+Control loop resumes automatically
+```
+
+### 7. Logging & Observability
+
+**Log Levels:**
+```python
+INFO  - Normal operations (every cycle)
+DEBUG - Detailed state information
+WARN  - Recoverable issues (sensor offline)
+ERROR - Control loop errors (retries)
+CRITICAL - Multiple consecutive failures (needs attention)
+```
+
+**Log Rotation:**
+```yaml
+logging:
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+```
+
+**What Gets Logged:**
+1. Temperature sample averaging
+2. Control decisions with reasoning
+3. Switch state changes
+4. Timing lock status
+5. Errors and recovery attempts
+
+**Example Log Sequence:**
+```
+INFO:main:Averaging 3 temperature samples: ['21.8', '21.9', '22.0'] -> 21.90°C
+INFO:main:Control decision: Turning ON: 21.9°C < 21.5°C (OFF for 15min >= 10min)
+INFO:main:Changing switch state: False -> True
+INFO:main:Switch successfully set to ON
+```
+
+## Network Architecture
+
+**v2.0 Limitation:** Used host network mode to access Shelly, broke Grafana compatibility.
+
+**v3.0 Solution:** Bridge network with `extra_hosts`:
 
 ```yaml
-services:
-  influxdb:      # Time-series database
-  api:           # REST API + Prometheus metrics
-  sensor-poller: # HTTP polling service (host network)
+api:
+  ports:
+    - "8001:8000"  # Grafana-compatible
+  extra_hosts:
+    - "host.docker.internal:host-gateway"  # Access Shelly on LAN
 ```
 
-### Network Configuration
+**Benefits:**
+- ✅ Standard port mapping (8001:8000)
+- ✅ Grafana can scrape metrics
+- ✅ Can still reach Shelly on host network
+- ✅ Better Docker isolation
 
-- **sensor-poller**: Uses `host` network mode to access Shelly on local network
-- **influxdb**: Internal Docker network + exposed port 8086
-- **api**: Internal Docker network + exposed port 8001
+## API Architecture
 
-### Environment Variables
+**RESTful Design:**
 
-**sensor-poller:**
-- `SHELLY_IP`: IP of Shelly Pro 2 gateway
-- `POLL_INTERVAL`: Seconds between polls
-- `INFLUXDB_URL`: InfluxDB connection URL
-- `INFLUXDB_TOKEN`: Authentication token
+```
+/api/v1/
+├── sensors              GET     List all sensors
+├── temperature          GET     Temperature history
+├── humidity             GET     Humidity history
+├── battery              GET     Battery levels
+├── latest               GET     Latest readings
+└── thermostat/
+    ├── config           GET     Current configuration
+    │                    POST    Update configuration
+    ├── status           GET     Current status + decision
+    └── switch           POST    Manual switch control
 
-**api:**
-- `INFLUXDB_URL`: InfluxDB connection URL
-- `INFLUXDB_TOKEN`: Authentication token
+/metrics                 GET     Prometheus metrics
+/health                  GET     Health status (extended)
+/docs                    GET     OpenAPI documentation
+```
 
-## Monitoring & Operations
+**Configuration Endpoint:**
+- GET: Returns current config from JSON file
+- POST: Validates, saves to JSON file, returns updated config
+- Pydantic validation ensures safe values
 
-### Health Checks
+**Status Endpoint:**
+Returns comprehensive state:
+- Current configuration
+- All sensor temperatures (outdoor, indoor, buffer)
+- Switch state (ON/OFF)
+- Active target temperature (based on mode)
+- Control decision (heating needed?)
+- Reason for decision (human-readable)
+- Switch lock status (remaining time)
 
-**Automated:**
-- Docker health checks on all services
-- API health endpoint: `/health`
+## Comparison with v2.0
 
-**Manual:**
-- `check_sensors.sh` - Comprehensive sensor health check
-- Shows: temperature, humidity, battery, RSSI, last update time
-
-### Logging
-
-- **sensor-poller**: Structured logs to stdout (captured by Docker)
-- **api**: Uvicorn access logs + application logs
-- **influxdb**: InfluxDB logs to stdout
-
-### Troubleshooting
-
-**Common Issues:**
-
-1. **Sensors not updating**
-   - Check Bluetooth range (10-30m)
-   - Run `check_sensors.sh` to verify connectivity
-   - Check `last_updated_ts` in Shelly API
-
-2. **No data in InfluxDB**
-   - Check poller logs: `docker logs iot-sensor-poller`
-   - Verify Shelly IP in docker-compose.yml
-   - Test Shelly API manually with curl
-
-3. **Stale Prometheus metrics**
-   - Verify Prometheus is scraping endpoint
-   - Check API logs for errors
-   - Ensure InfluxDB connection is healthy
+| Feature | v2.0 | v3.0 |
+|---------|------|------|
+| **Purpose** | Monitoring | Monitoring + Control |
+| **Services** | 3 (sensor-poller, influxdb, api) | 3 (same) |
+| **Shelly** | Read-only (sensors) | Read sensors + Control switch |
+| **Control Loop** | None | Async background task |
+| **Modes** | N/A | AUTO, ECO, ON, OFF |
+| **Temperature** | Single sample | Moving average (configurable) |
+| **Safety** | N/A | Hysteresis + timing constraints |
+| **Health Check** | Basic | Extended (includes control loop) |
+| **Logging** | Standard | Structured + rotation |
+| **Config** | Environment vars | JSON file + ENV |
+| **Persistence** | None | Config + state |
+| **API Endpoints** | 6 | 10 (added 4 thermostat) |
+| **Grafana Port** | 8001 | 8001 (fixed in v3.0) |
 
 ## Performance Characteristics
 
-- **Poll Rate**: Every 30 seconds
-- **Data Points**: ~2 sensors × 3 metrics × 2 polls/min = 6 writes/min
-- **Storage**: ~250KB per day per sensor
-- **Memory Usage**: ~300MB total (all services)
-- **CPU Usage**: <1% on Raspberry Pi 4
+**Control Loop Overhead:**
+- Runs every 180s by default (configurable 60-600s)
+- ~100ms per cycle (query InfluxDB + calculate + call Shelly)
+- Negligible impact on API response times
 
-## Security Considerations
+**Memory Usage:**
+- v2.0: ~200 MB (API container)
+- v3.0: ~210 MB (API container with thermostat)
+- Increase: ~10 MB (control loop state + JSON config)
 
-- No authentication on Shelly API (local network only)
-- InfluxDB token-based authentication
-- API exposed on localhost only (reverse proxy recommended for remote access)
-- No sensitive data in environment variables (except InfluxDB token)
+**Disk Usage:**
+- Logs: ~30 MB max (10MB × 3 files with rotation)
+- Config: <1 KB
+- No additional database storage needed
+
+## Design Trade-offs
+
+### Why Not MQTT for Control?
+
+❌ **MQTT Approach:**
+- Requires message broker
+- Async message handling
+- Potential message loss
+- More complex error handling
+- Need QoS management
+
+✅ **HTTP RPC Approach:**
+- Direct request-response
+- Immediate error feedback
+- Simple retry logic
+- Easy to debug with curl
+- No additional infrastructure
+
+### Why Background Task vs. Separate Service?
+
+❌ **Separate Service:**
+- Another container to manage
+- Inter-service communication
+- Duplicate health monitoring
+- More complex deployment
+
+✅ **Background Task in API:**
+- Single container
+- Shared InfluxDB client
+- Integrated logging
+- Simpler health checks
+- Easier to maintain
+
+### Why JSON File vs. Database?
+
+❌ **Database Storage:**
+- Need database container
+- Schema migrations
+- Connection management
+- Backup complexity
+
+✅ **JSON File:**
+- Human-readable
+- Easy to edit
+- Simple backup (file copy)
+- Version control friendly
+- No dependencies
 
 ## Future Enhancements
 
-- [ ] Alerting on sensor offline
-- [ ] Alerting on temperature thresholds
-- [ ] Multi-gateway support
-- [ ] Automatic sensor discovery
-- [ ] Built-in Grafana dashboards
-- [ ] Historical data export
+Possible v3.1 features:
+- PID control algorithm option
+- Schedule-based mode switching
+- Weather-based eco mode
+- Multiple zone support
+- Energy usage tracking
+- Grafana dashboard templates
 
-## Lessons Learned
+## Conclusion
 
-### What Worked Well
+Version 3.0 transforms the system from passive monitoring to active control while maintaining the simplicity principle established in v2.0. The architecture prioritizes:
 
-✅ **HTTP polling** - Simple, reliable, easy to debug
-✅ **Direct InfluxDB writes** - No intermediate layers
-✅ **Prometheus metrics with sensor_name** - Human-readable dashboards
-✅ **Docker Compose** - Easy deployment and updates
-✅ **check_sensors.sh** - Invaluable for troubleshooting
+1. **Simplicity:** Single additional file, no new services
+2. **Reliability:** Health checks + auto-restart
+3. **Safety:** Multiple protection mechanisms
+4. **Observability:** Comprehensive logging
+5. **Maintainability:** Human-readable configuration
+6. **Performance:** Minimal overhead
 
-### What Didn't Work
-
-❌ **MQTT approach** - Over-engineered for this scale
-❌ **Shelly scripting** - Too fragile, hard to maintain
-❌ **Message broker** - Unnecessary complexity
-
-### Key Takeaways
-
-> **"The best architecture is the simplest one that meets your needs."**
-
-For small-scale IoT (< 10 devices), **HTTP polling beats MQTT** in:
-- Simplicity
-- Reliability
-- Debuggability
-- Maintenance burden
-
-Only scale up to MQTT when you have:
-- 100+ devices
-- Unreliable networks
-- Need for pub/sub patterns
-- Bandwidth constraints
-
-## References
-
-- [Shelly Pro 2 API Documentation](https://shelly-api-docs.shelly.cloud/)
-- [Shelly BLU H&T Specifications](https://kb.shelly.cloud/knowledge-base/shelly-blu-h-t)
-- [InfluxDB 2.x Documentation](https://docs.influxdata.com/influxdb/v2.7/)
-- [Prometheus Exposition Format](https://prometheus.io/docs/instrumenting/exposition_formats/)
+The result is a production-ready thermostat system that's simple enough for a home deployment yet robust enough for reliable operation.

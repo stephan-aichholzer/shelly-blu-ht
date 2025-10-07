@@ -1,0 +1,17 @@
+{
+  "config": {
+    "target_temp": 22.0,
+    "eco_temp": 18.0,
+    "mode": "AUTO",
+    "hysteresis": 0.5,
+    "min_on_time": 30,
+    "min_off_time": 10,
+    "temp_sample_count": 5,
+    "control_interval": 120
+  },
+  "state": {
+    "switch_on": false,
+    "last_switch_change": null,
+    "last_control_decision": "Temperature 22.1\u00b0C in deadband [21.5\u00b0C - 22.5\u00b0C], maintaining current state"
+  }
+}

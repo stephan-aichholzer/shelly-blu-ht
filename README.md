@@ -1,12 +1,13 @@
-# Shelly BT Temperature Monitoring System
+# Shelly BT Temperature Monitoring & Thermostat Control System
 
-A simple, efficient Docker-based monitoring stack for collecting temperature and humidity data from Shelly BLU H&T sensors via HTTP polling.
+A simple, efficient Docker-based monitoring stack with intelligent thermostat control for Shelly BLU H&T sensors via HTTP polling.
 
 ## Overview
 
-This project creates a lightweight IoT monitoring solution using:
-- **Shelly Pro 2** as Bluetooth gateway
+This project creates a complete IoT solution featuring:
+- **Shelly Pro 2** as Bluetooth gateway and switch controller
 - **Shelly BLU H&T** sensors for temperature/humidity measurement
+- **Intelligent Thermostat** with temperature averaging and timing control
 - **HTTP Polling** for simple, reliable data collection (no MQTT complexity!)
 - **InfluxDB** for time-series data storage
 - **FastAPI** for REST API and Prometheus metrics
@@ -17,25 +18,35 @@ This project creates a lightweight IoT monitoring solution using:
 ```
 Shelly BLU H&T Sensors (Bluetooth)
          ↓
-    Shelly Pro 2 (BT Gateway)
+    Shelly Pro 2 (BT Gateway + Switch Controller)
          ↓
   HTTP Polling (every 30s)
          ↓
    Sensor Poller Service
          ↓
-      InfluxDB
+      InfluxDB ←──────────┐
+         ↓                 │
+    FastAPI + Thermostat  │
+         ↓                 │
+      Temperature Averaging (configurable samples)
+         ↓                 │
+    Control Logic ─────────┘
          ↓
-    FastAPI + Prometheus
+   Switch Control (Shelly Pro 2)
          ↓
-       Grafana
+    Heating/Cooling Device
 ```
 
-**Simple and reliable:** No message brokers, no complex MQTT configurations, just straightforward HTTP polling.
+**Simple and reliable:** No message brokers, no complex MQTT configurations, just straightforward HTTP polling with intelligent control.
 
 ## Hardware Requirements
 
 - **Shelly Pro 2** (Model: SPSW-202XE12UL) - Firmware 1.6.2+
+  - Acts as Bluetooth gateway for sensors
+  - Controls heating/cooling via built-in relay switches
 - **Shelly BLU H&T** Bluetooth temperature/humidity sensors (1 or more)
+  - At least one sensor required for thermostat control
+  - Indoor sensor used for temperature control
 - Network connectivity for the Shelly Pro 2
 
 ## Quick Start
@@ -91,13 +102,46 @@ sensor_temperature_celsius{sensor_name="temp_outdoor"}
 sensor_temperature_celsius{sensor_name="temp_indoor"}
 ```
 
+## Features
+
+### 🌡️ Temperature Monitoring
+- Real-time temperature and humidity data from multiple sensors
+- Prometheus metrics export for Grafana dashboards
+- InfluxDB storage for historical analysis
+- REST API for easy integration
+
+### 🎛️ Intelligent Thermostat Control (v3.0)
+- **4 Operating Modes:**
+  - `AUTO` - Normal temperature control with target setpoint
+  - `ECO` - Energy-saving mode with lower target temperature
+  - `ON` - Manual override (force heating ON)
+  - `OFF` - Manual override (force heating OFF)
+
+- **Smart Temperature Control:**
+  - Configurable temperature averaging (reduces noise from slow-responding systems)
+  - Symmetric hysteresis prevents oscillation (turn on/off thresholds)
+  - Minimum ON/OFF time constraints prevent rapid cycling
+  - Ideal for underfloor heating, radiators, or any slow thermal mass system
+
+- **Safety & Reliability:**
+  - Automatic health monitoring and container restart
+  - Persistent configuration survives restarts
+  - Human-readable JSON config file on host
+  - Real-time logging of all control decisions
+
+- **Monitoring:**
+  - Live control loop monitoring scripts
+  - Historical decision review
+  - Comprehensive logging with log rotation
+  - API endpoint for current status
+
 ## Services
 
 | Service | Port | Purpose |
 |---------|------|---------|
 | **sensor-poller** | - | Polls Shelly Pro 2 for sensor data every 30s |
 | **influxdb** | 8086 | Time-series database |
-| **api** | 8001 | REST API + Prometheus metrics |
+| **api** | 8001 | REST API + Prometheus metrics + Thermostat control |
 
 ## Configuration
 
@@ -119,6 +163,61 @@ Update `sensor-poller/poller.py` with your actual sensor details:
 
 Run `./check_sensors.sh` to discover your configuration.
 
+## Thermostat Quick Start
+
+### 1. Configure Thermostat
+
+```bash
+# View current configuration
+curl http://localhost:8001/api/v1/thermostat/config
+
+# Set target temperature to 22°C in AUTO mode
+curl -X POST http://localhost:8001/api/v1/thermostat/config \
+  -H "Content-Type: application/json" \
+  -d '{
+    "target_temp": 22.0,
+    "eco_temp": 18.0,
+    "mode": "AUTO",
+    "hysteresis": 0.5,
+    "min_on_time": 30,
+    "min_off_time": 10,
+    "temp_sample_count": 3,
+    "control_interval": 180
+  }'
+```
+
+### 2. Monitor Control Loop
+
+```bash
+# Watch real-time control decisions
+./watch_thermostat.sh
+
+# View historical decisions
+./show_thermostat_history.sh
+
+# Check current status
+curl http://localhost:8001/api/v1/thermostat/status
+```
+
+### 3. Configuration File
+
+Settings are persisted in `./data/thermostat_config.json` and can be edited directly:
+
+```json
+{
+  "config": {
+    "target_temp": 22.0,
+    "eco_temp": 18.0,
+    "mode": "AUTO",
+    "hysteresis": 0.5,
+    "min_on_time": 30,
+    "min_off_time": 10,
+    "temp_sample_count": 3,
+    "control_interval": 180
+  }
+}
+```
+
 ## Monitoring
 
 **Check sensor health:**
@@ -133,20 +232,39 @@ Shows:
 - Last update time
 - Connection status
 
+**Monitor thermostat control:**
+```bash
+# Live monitoring
+./watch_thermostat.sh
+
+# Historical review
+./show_thermostat_history.sh
+```
+
 **View logs:**
 ```bash
 docker logs iot-sensor-poller --tail 20
 docker logs iot-api --tail 20
+docker logs -f iot-api  # Follow live
 ```
 
 ## API Endpoints
 
-- `GET /health` - Health check
+### Monitoring
+- `GET /health` - Health check (includes thermostat status)
 - `GET /api/v1/sensors` - List all sensors
 - `GET /api/v1/temperature` - Temperature readings
 - `GET /api/v1/humidity` - Humidity readings
 - `GET /api/v1/battery` - Battery levels
 - `GET /metrics` - Prometheus metrics
+
+### Thermostat Control (v3.0)
+- `GET /api/v1/thermostat/config` - Get thermostat configuration
+- `POST /api/v1/thermostat/config` - Update thermostat settings
+- `GET /api/v1/thermostat/status` - Get current status and control decision
+- `POST /api/v1/thermostat/switch` - Manual switch control
+
+Full OpenAPI documentation at `http://localhost:8001/docs`
 
 ## Troubleshooting
 
@@ -164,18 +282,26 @@ docker logs iot-api --tail 20
 ## Documentation
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) - Architecture and design decisions
-- [check_sensors.sh](check_sensors.sh) - Sensor health check tool
+- [README_MONITORING.md](README_MONITORING.md) - Thermostat monitoring guide
 - [CHANGELOG.md](CHANGELOG.md) - Version history
+- [check_sensors.sh](check_sensors.sh) - Sensor health check tool
+- [watch_thermostat.sh](watch_thermostat.sh) - Live control loop monitoring
+- [show_thermostat_history.sh](show_thermostat_history.sh) - Historical review
 
 ## Development Status
 
-✅ **Production Ready (v2.0)**
+✅ **Production Ready (v3.0)**
 - [x] HTTP polling implementation
 - [x] Real BLU H&T sensor integration
 - [x] InfluxDB time-series storage
 - [x] FastAPI with Prometheus metrics
 - [x] Sensor health monitoring
 - [x] Complete Docker deployment
+- [x] **Intelligent thermostat control**
+- [x] **Temperature averaging for slow systems**
+- [x] **Automatic health monitoring & restart**
+- [x] **Persistent configuration**
+- [x] **Real-time control loop logging**
 - [ ] Grafana dashboards (user-configured)
 
 ## Design Philosophy

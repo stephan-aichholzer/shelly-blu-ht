@@ -13,6 +13,12 @@ from fastapi.responses import PlainTextResponse
 from influxdb_client import InfluxDBClient
 from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 from pydantic import BaseModel
+import asyncio
+import logging
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Prometheus metrics
 REQUEST_COUNT = Counter('api_requests_total', 'Total API requests', ['method', 'endpoint'])
@@ -62,6 +68,10 @@ class HealthStatus(BaseModel):
     timestamp: datetime
     version: str
     influxdb_connected: bool
+    shelly_connected: Optional[bool] = None
+    control_loop_running: Optional[bool] = None
+    last_control_loop_run: Optional[datetime] = None
+    control_loop_error: Optional[str] = None
 
 # Middleware for metrics
 @app.middleware("http")
@@ -76,32 +86,70 @@ async def root():
     """Root endpoint with API information"""
     return {
         "name": "IoT Temperature Monitoring API",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "endpoints": {
             "sensors": "/api/v1/sensors",
             "temperature": "/api/v1/temperature",
             "humidity": "/api/v1/humidity",
             "battery": "/api/v1/battery",
+            "latest": "/api/v1/latest",
+            "thermostat_config": "/api/v1/thermostat/config",
+            "thermostat_status": "/api/v1/thermostat/status",
+            "thermostat_switch": "/api/v1/thermostat/switch",
             "metrics": "/metrics",
-            "health": "/health"
+            "health": "/health",
+            "docs": "/docs"
         }
     }
 
 @app.get("/health", response_model=HealthStatus, summary="Health Check")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint - checks all critical components"""
+    from thermostat import shelly_controller, control_loop_state
+
+    # Test InfluxDB connection
     try:
-        # Test InfluxDB connection
         buckets = influx_client.buckets_api().find_buckets()
         influxdb_connected = True
     except Exception:
         influxdb_connected = False
 
+    # Test Shelly connection
+    shelly_connected = False
+    try:
+        shelly_controller.get_switch_status()
+        shelly_connected = True
+    except Exception:
+        pass
+
+    # Check control loop health
+    now = datetime.utcnow()
+    control_loop_healthy = True
+    control_loop_running = control_loop_state.get("running", False)
+    last_run = control_loop_state.get("last_run")
+    error = control_loop_state.get("last_error")
+
+    # Control loop should run at least every 6 minutes (3min interval + 3min grace)
+    if last_run and (now - last_run).total_seconds() > 360:
+        control_loop_healthy = False
+
+    # Determine overall health
+    is_healthy = (
+        influxdb_connected and
+        shelly_connected and
+        control_loop_healthy and
+        error is None
+    )
+
     return HealthStatus(
-        status="healthy" if influxdb_connected else "unhealthy",
-        timestamp=datetime.utcnow(),
-        version="1.0.0",
-        influxdb_connected=influxdb_connected
+        status="healthy" if is_healthy else "unhealthy",
+        timestamp=now,
+        version="2.0.0",
+        influxdb_connected=influxdb_connected,
+        shelly_connected=shelly_connected,
+        control_loop_running=control_loop_running,
+        last_control_loop_run=last_run,
+        control_loop_error=error
     )
 
 @app.get("/api/v1/sensors", response_model=List[SensorInfo], summary="List Sensors")
@@ -397,6 +445,283 @@ async def update_prometheus_metrics():
     except Exception as e:
         # Log error but don't fail the metrics endpoint
         print(f"Error updating Prometheus metrics: {e}")
+
+# ============================================================================
+# THERMOSTAT CONTROL ENDPOINTS
+# ============================================================================
+
+from thermostat import (
+    ThermostatConfig, ThermostatStatus, ThermostatMode,
+    thermostat_manager, shelly_controller, calculate_control_decision
+)
+
+@app.get("/api/v1/thermostat/config", response_model=ThermostatConfig, summary="Get Thermostat Configuration")
+async def get_thermostat_config():
+    """Get current thermostat configuration"""
+    return thermostat_manager.get_config()
+
+@app.post("/api/v1/thermostat/config", response_model=ThermostatConfig, summary="Set Thermostat Configuration")
+async def set_thermostat_config(config: ThermostatConfig):
+    """Update thermostat configuration (writes to persistent JSON file on host)"""
+    try:
+        thermostat_manager.set_config(config)
+        return thermostat_manager.get_config()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error saving configuration: {str(e)}")
+
+@app.get("/api/v1/thermostat/status", response_model=ThermostatStatus, summary="Get Thermostat Status")
+async def get_thermostat_status():
+    """Get current thermostat status including all sensor temperatures and switch state"""
+    try:
+        config = thermostat_manager.get_config()
+        state = thermostat_manager.get_state()
+
+        # Get all temperature sensor readings from InfluxDB
+        temp_query = '''
+        from(bucket: "sensor-data")
+          |> range(start: -5m)
+          |> filter(fn: (r) => r["_measurement"] == "temperature")
+          |> group(columns: ["sensor_name"])
+          |> last()
+        '''
+
+        temp_result = query_api.query(temp_query, org=INFLUXDB_ORG)
+        all_temps = {}
+        indoor_temp = None
+
+        for table in temp_result:
+            for record in table.records:
+                sensor_name = record.values.get("sensor_name", "unknown")
+                value = record.get_value()
+                all_temps[sensor_name] = value
+
+                # Use indoor sensor as control sensor
+                if sensor_name == "temp_indoor":
+                    indoor_temp = value
+
+        # Get switch status from Shelly
+        try:
+            switch_status = shelly_controller.get_switch_status()
+            switch_on = switch_status.get("output", False)
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"Cannot reach Shelly device: {str(e)}")
+
+        # Determine active target based on mode
+        if config.mode == ThermostatMode.AUTO:
+            active_target = config.target_temp
+        elif config.mode == ThermostatMode.ECO:
+            active_target = config.eco_temp
+        else:
+            active_target = config.target_temp  # For ON/OFF modes, show AUTO target
+
+        # Calculate control decision for AUTO/ECO modes
+        heating_needed = None
+        reason = None
+        switch_locked_until = None
+
+        if indoor_temp is not None and config.mode in [ThermostatMode.AUTO, ThermostatMode.ECO]:
+            should_be_on, decision_reason = calculate_control_decision(
+                current_temp=indoor_temp,
+                target_temp=active_target,
+                hysteresis=config.hysteresis,
+                current_switch_on=switch_on,
+                last_switch_change=state.last_switch_change,
+                min_on_time=config.min_on_time,
+                min_off_time=config.min_off_time
+            )
+            heating_needed = should_be_on
+            reason = decision_reason
+
+            # Calculate when switch will be unlocked
+            if state.last_switch_change:
+                if switch_on:
+                    unlock_time = state.last_switch_change + timedelta(minutes=config.min_on_time)
+                else:
+                    unlock_time = state.last_switch_change + timedelta(minutes=config.min_off_time)
+
+                if unlock_time > datetime.utcnow():
+                    switch_locked_until = unlock_time
+        elif config.mode == ThermostatMode.ON:
+            reason = "Manual override: Switch forced ON"
+        elif config.mode == ThermostatMode.OFF:
+            reason = "Manual override: Switch forced OFF"
+
+        return ThermostatStatus(
+            config=config,
+            current_temp=indoor_temp,
+            all_temps=all_temps,
+            switch_state=switch_on,
+            active_target=active_target,
+            heating_needed=heating_needed,
+            reason=reason,
+            switch_locked_until=switch_locked_until
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting thermostat status: {str(e)}")
+
+@app.post("/api/v1/thermostat/switch", summary="Manual Switch Control")
+async def control_switch(turn_on: bool):
+    """
+    Manually control the switch (overrides AUTO/ECO mode temporarily)
+    Note: This does NOT change the mode - switch will be controlled by mode on next status check
+    """
+    try:
+        result = shelly_controller.set_switch(turn_on)
+        thermostat_manager.update_state(turn_on, f"Manual switch control: {'ON' if turn_on else 'OFF'}")
+        return {
+            "success": True,
+            "switch_on": turn_on,
+            "shelly_response": result,
+            "note": "Switch set manually - will be controlled by configured mode on next cycle"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Error controlling switch: {str(e)}")
+
+# ============================================================================
+# BACKGROUND CONTROL LOOP
+# ============================================================================
+
+from thermostat import control_loop_state
+
+async def thermostat_control_loop():
+    """
+    Background task that runs the thermostat control loop every 60 seconds
+    Automatically controls the switch based on mode and temperature
+    """
+    from thermostat import ThermostatMode
+
+    logger.info("Starting thermostat control loop")
+    control_loop_state["running"] = True
+
+    while True:
+        try:
+            control_loop_state["last_run"] = datetime.utcnow()
+
+            # Get current configuration
+            config = thermostat_manager.get_config()
+
+            # Skip control loop if mode is manual (ON/OFF)
+            if config.mode == ThermostatMode.ON:
+                logger.debug("Mode is ON - forcing switch ON")
+                try:
+                    result = shelly_controller.set_switch(True)
+                    if result.get("output") is True:
+                        thermostat_manager.update_state(True, "Manual mode: ON")
+                except Exception as e:
+                    logger.error(f"Error forcing switch ON: {e}")
+
+            elif config.mode == ThermostatMode.OFF:
+                logger.debug("Mode is OFF - forcing switch OFF")
+                try:
+                    result = shelly_controller.set_switch(False)
+                    if result.get("output") is False:
+                        thermostat_manager.update_state(False, "Manual mode: OFF")
+                except Exception as e:
+                    logger.error(f"Error forcing switch OFF: {e}")
+
+            elif config.mode in [ThermostatMode.AUTO, ThermostatMode.ECO]:
+                # Get last N temperature samples and average them for slow-responding systems
+                sample_count = config.temp_sample_count
+                temp_query = f'''
+                from(bucket: "sensor-data")
+                  |> range(start: -5m)
+                  |> filter(fn: (r) => r["_measurement"] == "temperature")
+                  |> filter(fn: (r) => r["sensor_name"] == "temp_indoor")
+                  |> sort(columns: ["_time"], desc: true)
+                  |> limit(n: {sample_count})
+                '''
+
+                temp_result = query_api.query(temp_query, org=INFLUXDB_ORG)
+                temps = []
+
+                for table in temp_result:
+                    for record in table.records:
+                        temps.append(record.get_value())
+
+                # Average the samples (or fewer if not enough data yet)
+                indoor_temp = sum(temps) / len(temps) if temps else None
+
+                if indoor_temp and len(temps) > 1:
+                    logger.info(f"Averaging {len(temps)} temperature samples: {[f'{t:.1f}' for t in temps]} -> {indoor_temp:.2f}°C")
+
+                if indoor_temp is None:
+                    logger.warning("No indoor temperature data available")
+                    control_loop_state["last_error"] = "No indoor temperature data"
+                    control_loop_state["consecutive_errors"] += 1
+                else:
+                    # Clear error state on success
+                    control_loop_state["last_error"] = None
+                    control_loop_state["consecutive_errors"] = 0
+
+                    # Determine target temperature
+                    target = config.target_temp if config.mode == ThermostatMode.AUTO else config.eco_temp
+
+                    # Get current switch state
+                    state = thermostat_manager.get_state()
+                    switch_status = shelly_controller.get_switch_status()
+                    current_switch_on = switch_status.get("output", False)
+
+                    # Calculate control decision
+                    should_be_on, reason = calculate_control_decision(
+                        current_temp=indoor_temp,
+                        target_temp=target,
+                        hysteresis=config.hysteresis,
+                        current_switch_on=current_switch_on,
+                        last_switch_change=state.last_switch_change,
+                        min_on_time=config.min_on_time,
+                        min_off_time=config.min_off_time
+                    )
+
+                    logger.info(f"Control decision: {reason}")
+
+                    # Execute switch control if state should change
+                    if should_be_on != current_switch_on:
+                        logger.info(f"Changing switch state: {current_switch_on} -> {should_be_on}")
+                        result = shelly_controller.set_switch(should_be_on)
+
+                        if result.get("output") == should_be_on:
+                            thermostat_manager.update_state(should_be_on, reason)
+                            logger.info(f"Switch successfully set to {'ON' if should_be_on else 'OFF'}")
+                        else:
+                            logger.error(f"Switch state mismatch after command: expected {should_be_on}, got {result.get('output')}")
+                    else:
+                        # Update state even if not changing (for decision logging)
+                        thermostat_manager.update_state(current_switch_on, reason)
+
+        except Exception as e:
+            logger.error(f"Error in control loop: {e}", exc_info=True)
+            control_loop_state["last_error"] = str(e)
+            control_loop_state["consecutive_errors"] += 1
+
+            # If too many consecutive errors, log critical warning
+            if control_loop_state["consecutive_errors"] >= 5:
+                logger.critical(f"Control loop has failed {control_loop_state['consecutive_errors']} times consecutively!")
+
+        # Wait for configured interval before next iteration
+        # Read config to get current interval (allows dynamic adjustment)
+        try:
+            config = thermostat_manager.get_config()
+            sleep_time = config.control_interval
+        except:
+            sleep_time = 180  # Default to 3 minutes if config read fails
+
+        logger.debug(f"Sleeping for {sleep_time} seconds until next control loop iteration")
+        await asyncio.sleep(sleep_time)
+
+@app.on_event("startup")
+async def startup_event():
+    """Start background tasks on application startup"""
+    logger.info("Application starting up - initializing background tasks")
+    asyncio.create_task(thermostat_control_loop())
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on application shutdown"""
+    logger.info("Application shutting down")
+    control_loop_state["running"] = False
 
 if __name__ == "__main__":
     import uvicorn
