@@ -27,6 +27,9 @@ SENSOR_TEMPERATURE = Gauge('sensor_temperature_celsius', 'Current temperature', 
 SENSOR_HUMIDITY = Gauge('sensor_humidity_percent', 'Current humidity', ['device_id', 'sensor_id', 'sensor_name'])
 SENSOR_BATTERY = Gauge('sensor_battery_percent', 'Current battery level', ['device_id', 'sensor_id', 'sensor_name'])
 SENSOR_LAST_SEEN = Gauge('sensor_last_seen_timestamp', 'Last seen timestamp', ['device_id', 'sensor_id', 'sensor_name'])
+THERMOSTAT_SWITCH_STATE = Gauge('thermostat_switch_state', 'Thermostat switch state (1=ON, 0=OFF)')
+THERMOSTAT_TARGET_TEMP = Gauge('thermostat_target_temperature_celsius', 'Thermostat target temperature')
+THERMOSTAT_CURRENT_TEMP = Gauge('thermostat_current_temperature_celsius', 'Current indoor temperature used for control')
 
 app = FastAPI(
     title="IoT Temperature Monitoring API",
@@ -571,6 +574,7 @@ async def control_switch(turn_on: bool):
     try:
         result = shelly_controller.set_switch(turn_on)
         thermostat_manager.update_state(turn_on, f"Manual switch control: {'ON' if turn_on else 'OFF'}")
+        THERMOSTAT_SWITCH_STATE.set(1 if turn_on else 0)
         return {
             "success": True,
             "switch_on": turn_on,
@@ -610,6 +614,7 @@ async def thermostat_control_loop():
                     result = shelly_controller.set_switch(True)
                     if result.get("output") is True:
                         thermostat_manager.update_state(True, "Manual mode: ON")
+                        THERMOSTAT_SWITCH_STATE.set(1)
                 except Exception as e:
                     logger.error(f"Error forcing switch ON: {e}")
 
@@ -619,6 +624,7 @@ async def thermostat_control_loop():
                     result = shelly_controller.set_switch(False)
                     if result.get("output") is False:
                         thermostat_manager.update_state(False, "Manual mode: OFF")
+                        THERMOSTAT_SWITCH_STATE.set(0)
                 except Exception as e:
                     logger.error(f"Error forcing switch OFF: {e}")
 
@@ -659,6 +665,10 @@ async def thermostat_control_loop():
                     # Determine target temperature
                     target = config.target_temp if config.mode == ThermostatMode.AUTO else config.eco_temp
 
+                    # Update target temperature metric
+                    THERMOSTAT_TARGET_TEMP.set(target)
+                    THERMOSTAT_CURRENT_TEMP.set(indoor_temp)
+
                     # Get current switch state
                     state = thermostat_manager.get_state()
                     switch_status = shelly_controller.get_switch_status()
@@ -682,14 +692,27 @@ async def thermostat_control_loop():
                         logger.info(f"Changing switch state: {current_switch_on} -> {should_be_on}")
                         result = shelly_controller.set_switch(should_be_on)
 
-                        if result.get("output") == should_be_on:
+                        # Small delay to let switch settle (race condition fix)
+                        await asyncio.sleep(0.2)
+
+                        # Verify the switch was set correctly
+                        # Shelly Switch.Set returns {"was_on": bool} not {"output": bool}
+                        # So we need to query the status to verify
+                        verify_status = shelly_controller.get_switch_status()
+                        actual_state = verify_status.get("output", None)
+
+                        if actual_state == should_be_on:
                             thermostat_manager.update_state(should_be_on, reason)
                             logger.info(f"Switch successfully set to {'ON' if should_be_on else 'OFF'}")
+                            THERMOSTAT_SWITCH_STATE.set(1 if should_be_on else 0)
                         else:
-                            logger.error(f"Switch state mismatch after command: expected {should_be_on}, got {result.get('output')}")
+                            logger.error(f"Switch state mismatch after command: expected {should_be_on}, got {actual_state}")
+                            control_loop_state["last_error"] = f"Switch verification failed: expected {should_be_on}, got {actual_state}"
+                            control_loop_state["consecutive_errors"] += 1
                     else:
                         # Update state even if not changing (for decision logging)
                         thermostat_manager.update_state(current_switch_on, reason)
+                        THERMOSTAT_SWITCH_STATE.set(1 if current_switch_on else 0)
 
         except Exception as e:
             logger.error(f"Error in control loop: {e}", exc_info=True)

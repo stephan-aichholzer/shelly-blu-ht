@@ -71,10 +71,24 @@ INFO:main:Averaging 5 temperature samples: ['22.1', '22.1', '22.1', '22.1', '22.
 ```
 
 ### Control Decisions
+
+**With Timing Information (shows runtime/idle time and remaining lock time):**
+
 ```
-INFO:main:Control decision: Temperature 22.1°C in deadband [21.5°C - 22.5°C], maintaining current state
-INFO:main:Control decision: Turning ON: 21.0°C < 21.5°C (OFF for 15min >= 10min)
-INFO:main:Control decision: Heating needed but locked OFF (only 5min, need 10min, 5min remaining)
+INFO:main:Control decision: Heating: 21.7°C < 21.8°C (already ON, running 5/30min)
+INFO:main:Control decision: Target reached: 22.5°C >= 22.2°C (already OFF, idle 12/10min)
+INFO:main:Control decision: Temperature 21.9°C in deadband [21.8°C - 22.2°C], maintaining ON (running 20/30min)
+INFO:main:Control decision: Temperature 21.9°C in deadband [21.8°C - 22.2°C], maintaining OFF (idle 8/10min)
+INFO:main:Control decision: Turning ON: 21.7°C < 21.8°C (OFF for 12min >= 10min)
+INFO:main:Control decision: Turning OFF: 22.5°C >= 22.2°C (ON for 35min >= 30min)
+INFO:main:Control decision: Heating needed but locked OFF (idle 5/10min, 5min remaining)
+INFO:main:Control decision: Target reached but locked ON (running 15/30min, 15min remaining)
+```
+
+**Format:**
+- `(running X/Ymin)` = Switch ON for X minutes, minimum ON time is Y minutes
+- `(idle X/Ymin)` = Switch OFF for X minutes, minimum OFF time is Y minutes
+- `(X/Ymin, Zmin remaining)` = When locked, shows remaining time until action allowed
 ```
 
 ### Switch Actions
@@ -101,6 +115,16 @@ Check health:
 ```bash
 curl -s http://localhost:8001/health | python3 -m json.tool
 ```
+
+View Prometheus metrics (includes thermostat switch state):
+```bash
+curl -s http://localhost:8001/metrics | grep thermostat
+```
+
+**Thermostat Metrics:**
+- `thermostat_switch_state` - 1=ON (heating), 0=OFF
+- `thermostat_target_temperature_celsius` - Current target setpoint
+- `thermostat_current_temperature_celsius` - Current averaged indoor temperature
 
 ## Grafana Dashboard Integration
 

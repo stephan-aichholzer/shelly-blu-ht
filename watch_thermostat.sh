@@ -9,4 +9,4 @@ echo "Monitoring control loop decisions..."
 echo "Press Ctrl+C to stop"
 echo ""
 
-docker logs -f --tail 20 iot-api 2>&1 | grep --line-buffered -E 'Averaging|Control decision|Changing switch|Turning|ERROR|CRITICAL'
+docker logs -f --tail 20 --timestamps iot-api 2>&1 | grep --line-buffered -E 'Averaging|Control decision|Changing switch|Turning|ERROR|CRITICAL'

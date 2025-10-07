@@ -256,7 +256,12 @@ docker logs -f iot-api  # Follow live
 - `GET /api/v1/temperature` - Temperature readings
 - `GET /api/v1/humidity` - Humidity readings
 - `GET /api/v1/battery` - Battery levels
-- `GET /metrics` - Prometheus metrics
+- `GET /metrics` - Prometheus metrics (includes thermostat metrics)
+
+**Thermostat Prometheus Metrics:**
+- `thermostat_switch_state` - Switch state (1=ON/heating, 0=OFF)
+- `thermostat_target_temperature_celsius` - Target temperature setpoint
+- `thermostat_current_temperature_celsius` - Current averaged indoor temperature
 
 ### Thermostat Control (v3.0)
 - `GET /api/v1/thermostat/config` - Get thermostat configuration
