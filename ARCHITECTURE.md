@@ -377,9 +377,16 @@ Returns comprehensive state:
 - Increase: ~10 MB (control loop state + JSON config)
 
 **Disk Usage:**
-- Logs: ~30 MB max (10MB × 3 files with rotation)
+- Logs: ~60 MB max (API: 30MB + Sensor-poller: 30MB with rotation)
+- InfluxDB: ~450 MB max (180-day retention)
 - Config: <1 KB
-- No additional database storage needed
+- Total steady state: ~510 MB (0.4% of 128GB SD card)
+
+**SD Card Write Optimization:**
+- State file only written on actual changes (not every cycle)
+- Log rotation on all containers (10MB × 3 files)
+- Daily writes: ~2.5 MB/day (sensor data + logs)
+- Expected SD card lifespan: Decades on quality cards
 
 ## Design Trade-offs
 

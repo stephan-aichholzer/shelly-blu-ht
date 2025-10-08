@@ -284,6 +284,21 @@ Full OpenAPI documentation at `http://localhost:8001/docs`
 2. Verify Shelly IP is correct in docker-compose.yml
 3. Ensure sensors are paired with Shelly Pro 2
 
+## System Requirements & Longevity
+
+**Storage (128GB SD Card on Raspberry Pi 5):**
+- InfluxDB data: ~450 MB max (180-day retention)
+- Docker logs: ~60 MB max (30MB per container with rotation)
+- Total steady state: ~510 MB (0.4% of capacity)
+- **Years to fill**: 50+ years at current rate
+
+**SD Card Longevity:**
+- Daily writes: ~2.5 MB/day (sensor data + logs)
+- All containers have log rotation (10MB × 3 files)
+- State writes only on changes (optimized for SD card wear)
+- Expected lifespan: Decades on quality SD cards
+- No maintenance required for typical home deployment
+
 ## Documentation
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) - Architecture and design decisions
