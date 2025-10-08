@@ -245,12 +245,22 @@ class ThermostatManager:
 
     def update_state(self, switch_on: bool, decision: Optional[str] = None):
         """Update state after switch change"""
+        changed = False
+
+        # Check if switch state changed
         if switch_on != self.state.switch_on:
             self.state.last_switch_change = datetime.utcnow()
-        self.state.switch_on = switch_on
-        if decision:
+            self.state.switch_on = switch_on
+            changed = True
+
+        # Check if decision changed
+        if decision and decision != self.state.last_control_decision:
             self.state.last_control_decision = decision
-        self._save()
+            changed = True
+
+        # Only save to disk if something actually changed
+        if changed:
+            self._save()
 
 
 class ShellyController:
