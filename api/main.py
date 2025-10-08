@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.responses import PlainTextResponse
 from influxdb_client import InfluxDBClient
 from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import asyncio
 import logging
 
@@ -31,10 +31,129 @@ THERMOSTAT_SWITCH_STATE = Gauge('thermostat_switch_state', 'Thermostat switch st
 THERMOSTAT_TARGET_TEMP = Gauge('thermostat_target_temperature_celsius', 'Thermostat target temperature')
 THERMOSTAT_CURRENT_TEMP = Gauge('thermostat_current_temperature_celsius', 'Current indoor temperature used for control')
 
+tags_metadata = [
+    {
+        "name": "System Information",
+        "description": "API metadata, health checks, and version information"
+    },
+    {
+        "name": "Sensor Monitoring",
+        "description": "Query temperature, humidity, and battery data from Shelly BLU H&T sensors"
+    },
+    {
+        "name": "Thermostat Control",
+        "description": "Configure and monitor the intelligent thermostat control system"
+    },
+    {
+        "name": "Metrics",
+        "description": "Prometheus metrics export for Grafana integration"
+    }
+]
+
 app = FastAPI(
-    title="IoT Temperature Monitoring API",
-    description="REST API for temperature and humidity sensor data",
-    version="1.0.0"
+    title="Shelly BT Thermostat Control & Monitoring API",
+    description="""
+# IoT Temperature Monitoring & Intelligent Thermostat Control System
+
+A production-ready REST API for monitoring Shelly BLU H&T Bluetooth temperature sensors
+and controlling a heating/cooling system via Shelly Pro 2 switch with intelligent
+temperature-based automation.
+
+## System Architecture
+
+```
+Shelly BLU H&T Sensors (Bluetooth) → Shelly Pro 2 Gateway
+                                           ↓
+                                    HTTP Polling (30s)
+                                           ↓
+                                       InfluxDB
+                                           ↓
+                                    FastAPI + Control Loop
+                                           ↓
+                                    Shelly Pro 2 Switch
+                                           ↓
+                                    Heating/Cooling Device
+```
+
+## Key Features
+
+- **Real-time Monitoring**: Temperature, humidity, and battery levels from multiple BLE sensors
+- **Intelligent Control**: 4 operating modes (AUTO, ECO, ON, OFF) with hysteresis and timing protection
+- **Temperature Averaging**: Configurable sample averaging for slow-responding thermal systems
+- **Safety Mechanisms**: Minimum ON/OFF times prevent rapid cycling and equipment damage
+- **Persistent Configuration**: Settings survive container restarts via JSON file storage
+- **Prometheus Integration**: Full metrics export for Grafana dashboards
+- **Automatic Health Monitoring**: Self-healing with Docker healthchecks
+
+## Operating Modes
+
+- **AUTO**: Normal operation - maintains target_temp with full control logic
+- **ECO**: Energy-saving mode - maintains eco_temp (typically lower than target)
+- **ON**: Manual override - forces heating/cooling ON regardless of temperature
+- **OFF**: Manual override - forces heating/cooling OFF regardless of temperature
+
+## Control Logic
+
+The system uses **symmetric hysteresis control** to prevent oscillation:
+
+- Turn ON when: temperature < (target - hysteresis)
+- Turn OFF when: temperature >= (target + hysteresis)
+- Deadband: Between thresholds, maintain current state
+- Timing locks: Enforce minimum ON/OFF durations to protect equipment
+
+Example: target=22°C, hysteresis=0.5°C
+- Heating starts: < 21.5°C
+- Heating stops: ≥ 22.5°C
+- Deadband (21.5-22.5°C): No state change
+
+## Background Control Loop
+
+An async background task runs every 60-600 seconds (configurable) to:
+1. Query last N temperature samples from InfluxDB
+2. Calculate moving average (reduces sensor noise)
+3. Apply control logic based on mode and temperature
+4. Execute switch commands via Shelly RPC API
+5. Log all decisions and update Prometheus metrics
+
+## Common Workflows
+
+### Initial Setup
+1. Configure thermostat: `POST /api/v1/thermostat/config`
+2. Verify configuration: `GET /api/v1/thermostat/config`
+3. Monitor status: `GET /api/v1/thermostat/status`
+
+### Temperature Monitoring
+1. List sensors: `GET /api/v1/sensors`
+2. Get latest readings: `GET /api/v1/latest`
+3. Historical data: `GET /api/v1/temperature?start=2025-01-01T00:00:00Z`
+
+### Grafana Integration
+1. Configure Prometheus datasource pointing to `/metrics`
+2. Use metrics: `thermostat_switch_state`, `thermostat_target_temperature_celsius`
+3. Query sensor data: `sensor_temperature_celsius{sensor_name="temp_indoor"}`
+
+## Hardware Requirements
+
+- **Shelly Pro 2** (SPSW-202XE12UL): BT gateway + relay switch controller
+- **Shelly BLU H&T**: 1+ Bluetooth temperature/humidity sensors
+- Network connectivity for Shelly Pro 2
+
+## Safety & Reliability
+
+- Minimum timing constraints prevent equipment damage from rapid cycling
+- Hysteresis prevents oscillation around setpoint
+- Health monitoring with automatic container restart
+- Configuration persisted to host filesystem
+- All control decisions logged with detailed reasoning
+    """,
+    version="3.0.0",
+    openapi_tags=tags_metadata,
+    contact={
+        "name": "Project Repository"
+    },
+    license_info={
+        "name": "MIT"
+    }
 )
 
 # Configuration
@@ -53,28 +172,64 @@ query_api = influx_client.query_api()
 
 # Data models
 class SensorReading(BaseModel):
-    timestamp: datetime
-    device_id: str
-    sensor_id: Optional[str] = None
-    value: float
-    unit: str
+    timestamp: datetime = Field(description="UTC timestamp of the reading")
+    device_id: str = Field(description="Shelly device ID (e.g., '200')")
+    sensor_id: Optional[str] = Field(None, description="Sensor component ID within device")
+    value: float = Field(description="Measurement value (temperature in °C, humidity/battery in %)")
+    unit: str = Field(description="Unit of measurement: 'celsius', 'percent'")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "timestamp": "2025-10-08T12:30:00Z",
+                "device_id": "200",
+                "sensor_id": "0",
+                "value": 21.5,
+                "unit": "celsius"
+            }
+        }
 
 class SensorInfo(BaseModel):
-    device_id: str
-    sensor_id: Optional[str] = None
-    sensor_type: str
-    last_seen: Optional[datetime] = None
-    measurements: List[str]
+    device_id: str = Field(description="Shelly device ID")
+    sensor_id: Optional[str] = Field(None, description="Sensor component ID")
+    sensor_type: str = Field(description="Sensor type (e.g., 'bthome' for Shelly BLU H&T)")
+    last_seen: Optional[datetime] = Field(None, description="UTC timestamp of last data received from sensor")
+    measurements: List[str] = Field(description="Available measurement types: 'temperature', 'humidity', 'battery'")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "device_id": "200",
+                "sensor_id": "0",
+                "sensor_type": "bthome",
+                "last_seen": "2025-10-08T12:30:00Z",
+                "measurements": ["temperature", "humidity", "battery"]
+            }
+        }
 
 class HealthStatus(BaseModel):
-    status: str
-    timestamp: datetime
-    version: str
-    influxdb_connected: bool
-    shelly_connected: Optional[bool] = None
-    control_loop_running: Optional[bool] = None
-    last_control_loop_run: Optional[datetime] = None
-    control_loop_error: Optional[str] = None
+    status: str = Field(description="Overall health status: 'healthy' or 'unhealthy'")
+    timestamp: datetime = Field(description="UTC timestamp of health check")
+    version: str = Field(description="API version")
+    influxdb_connected: bool = Field(description="True if InfluxDB is reachable and can query data")
+    shelly_connected: Optional[bool] = Field(None, description="True if Shelly Pro 2 device is reachable")
+    control_loop_running: Optional[bool] = Field(None, description="True if thermostat control loop background task is running")
+    last_control_loop_run: Optional[datetime] = Field(None, description="UTC timestamp of last control loop execution")
+    control_loop_error: Optional[str] = Field(None, description="Last error message from control loop, if any")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "status": "healthy",
+                "timestamp": "2025-10-08T12:30:00Z",
+                "version": "2.0.0",
+                "influxdb_connected": True,
+                "shelly_connected": True,
+                "control_loop_running": True,
+                "last_control_loop_run": "2025-10-08T12:28:00Z",
+                "control_loop_error": None
+            }
+        }
 
 # Middleware for metrics
 @app.middleware("http")
@@ -84,7 +239,7 @@ async def metrics_middleware(request, call_next):
         response = await call_next(request)
         return response
 
-@app.get("/", summary="API Information")
+@app.get("/", summary="API Information", tags=["System Information"])
 async def root():
     """Root endpoint with API information"""
     return {
@@ -105,9 +260,21 @@ async def root():
         }
     }
 
-@app.get("/health", response_model=HealthStatus, summary="Health Check")
+@app.get("/health", response_model=HealthStatus, summary="Health Check", tags=["System Information"])
 async def health_check():
-    """Health check endpoint - checks all critical components"""
+    """
+    Comprehensive health check endpoint that verifies all critical system components.
+
+    Checks performed:
+    - **InfluxDB Connection**: Can query time-series database
+    - **Shelly Connection**: Can reach Shelly Pro 2 device
+    - **Control Loop**: Background task is running and executed recently
+    - **Error State**: No consecutive failures
+
+    Returns 'healthy' status only if all components are operational.
+
+    Used by Docker healthcheck for automatic container restart on failure.
+    """
     from thermostat import shelly_controller, control_loop_state
 
     # Test InfluxDB connection
@@ -155,9 +322,19 @@ async def health_check():
         control_loop_error=error
     )
 
-@app.get("/api/v1/sensors", response_model=List[SensorInfo], summary="List Sensors")
+@app.get("/api/v1/sensors", response_model=List[SensorInfo], summary="List Sensors", tags=["Sensor Monitoring"])
 async def list_sensors():
-    """Get list of all available sensors"""
+    """
+    Get a list of all available Shelly BLU H&T sensors detected in the system.
+
+    Returns sensor metadata including:
+    - Device ID and sensor ID
+    - Sensor type (e.g., 'bthome')
+    - Last seen timestamp
+    - Available measurements (temperature, humidity, battery)
+
+    Queries the last 7 days of data to discover all active sensors.
+    """
     try:
         query = f'''
         from(bucket: "{INFLUXDB_BUCKET}")
@@ -200,7 +377,7 @@ async def list_sensors():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error querying sensors: {str(e)}")
 
-@app.get("/api/v1/temperature", response_model=List[SensorReading], summary="Get Temperature Data")
+@app.get("/api/v1/temperature", response_model=List[SensorReading], summary="Get Temperature Data", tags=["Sensor Monitoring"])
 async def get_temperature(
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
     sensor_id: Optional[str] = Query(None, description="Filter by sensor ID"),
@@ -208,10 +385,22 @@ async def get_temperature(
     end: Optional[datetime] = Query(None, description="End time (ISO format)"),
     limit: int = Query(1000, description="Maximum number of records", le=10000)
 ):
-    """Get temperature readings"""
+    """
+    Query historical temperature readings from InfluxDB.
+
+    Returns temperature data sorted by timestamp (most recent first).
+    Default time range is last 24 hours if no start/end specified.
+
+    **Parameters:**
+    - `device_id`: Filter by specific sensor device (e.g., "200")
+    - `sensor_id`: Filter by sensor ID within device
+    - `start`: Start timestamp in ISO 8601 format (e.g., "2025-01-01T00:00:00Z")
+    - `end`: End timestamp in ISO 8601 format
+    - `limit`: Maximum records to return (default: 1000, max: 10000)
+    """
     return await get_sensor_data("temperature", device_id, sensor_id, start, end, limit)
 
-@app.get("/api/v1/humidity", response_model=List[SensorReading], summary="Get Humidity Data")
+@app.get("/api/v1/humidity", response_model=List[SensorReading], summary="Get Humidity Data", tags=["Sensor Monitoring"])
 async def get_humidity(
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
     sensor_id: Optional[str] = Query(None, description="Filter by sensor ID"),
@@ -219,10 +408,15 @@ async def get_humidity(
     end: Optional[datetime] = Query(None, description="End time (ISO format)"),
     limit: int = Query(1000, description="Maximum number of records", le=10000)
 ):
-    """Get humidity readings"""
+    """
+    Query historical humidity readings from InfluxDB.
+
+    Returns relative humidity percentage data sorted by timestamp (most recent first).
+    Default time range is last 24 hours if no start/end specified.
+    """
     return await get_sensor_data("humidity", device_id, sensor_id, start, end, limit)
 
-@app.get("/api/v1/battery", response_model=List[SensorReading], summary="Get Battery Data")
+@app.get("/api/v1/battery", response_model=List[SensorReading], summary="Get Battery Data", tags=["Sensor Monitoring"])
 async def get_battery(
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
     sensor_id: Optional[str] = Query(None, description="Filter by sensor ID"),
@@ -230,7 +424,12 @@ async def get_battery(
     end: Optional[datetime] = Query(None, description="End time (ISO format)"),
     limit: int = Query(1000, description="Maximum number of records", le=10000)
 ):
-    """Get battery level readings"""
+    """
+    Query battery level readings from Shelly BLU H&T sensors.
+
+    Returns battery percentage (0-100%) sorted by timestamp (most recent first).
+    Useful for monitoring sensor health and planning battery replacements.
+    """
     return await get_sensor_data("battery", device_id, sensor_id, start, end, limit, "level")
 
 async def get_sensor_data(
@@ -319,9 +518,16 @@ async def get_sensor_data(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error querying {measurement} data: {str(e)}")
 
-@app.get("/api/v1/latest", summary="Get Latest Readings")
+@app.get("/api/v1/latest", summary="Get Latest Readings", tags=["Sensor Monitoring"])
 async def get_latest_readings():
-    """Get the latest reading for each sensor"""
+    """
+    Get the most recent readings from all sensors in a single response.
+
+    Returns the latest temperature, humidity, and battery level for each sensor.
+    Ideal for dashboard displays showing current state of all sensors.
+
+    Queries the last hour of data to find most recent values.
+    """
     try:
         query = f'''
         from(bucket: "{INFLUXDB_BUCKET}")
@@ -363,9 +569,29 @@ async def get_latest_readings():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error querying latest readings: {str(e)}")
 
-@app.get("/metrics", response_class=PlainTextResponse, summary="Prometheus Metrics")
+@app.get("/metrics", response_class=PlainTextResponse, summary="Prometheus Metrics", tags=["Metrics"])
 async def metrics():
-    """Prometheus metrics endpoint - updates gauges with latest values"""
+    """
+    Prometheus metrics endpoint in text exposition format.
+
+    Updates all gauge metrics with latest sensor and thermostat values before serving.
+
+    **Sensor Metrics:**
+    - `sensor_temperature_celsius{device_id, sensor_id, sensor_name}`: Current temperature
+    - `sensor_humidity_percent{device_id, sensor_id, sensor_name}`: Current humidity
+    - `sensor_battery_percent{device_id, sensor_id, sensor_name}`: Battery level
+
+    **Thermostat Metrics:**
+    - `thermostat_switch_state`: Switch state (1=ON/heating, 0=OFF)
+    - `thermostat_target_temperature_celsius`: Active target temperature
+    - `thermostat_current_temperature_celsius`: Current averaged indoor temperature
+
+    **API Metrics:**
+    - `api_requests_total{method, endpoint}`: Request counter
+    - `api_request_duration_seconds`: Request duration histogram
+
+    Configure Grafana to scrape this endpoint for real-time dashboards.
+    """
     # Update Prometheus gauges with latest sensor data before serving metrics
     await update_prometheus_metrics()
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
@@ -458,23 +684,201 @@ from thermostat import (
     thermostat_manager, shelly_controller, calculate_control_decision
 )
 
-@app.get("/api/v1/thermostat/config", response_model=ThermostatConfig, summary="Get Thermostat Configuration")
+@app.get(
+    "/api/v1/thermostat/config",
+    response_model=ThermostatConfig,
+    summary="Get Thermostat Configuration",
+    tags=["Thermostat Control"],
+    responses={
+        200: {
+            "description": "Current thermostat configuration",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "target_temp": 22.0,
+                        "eco_temp": 18.0,
+                        "mode": "AUTO",
+                        "hysteresis": 0.5,
+                        "min_on_time": 30,
+                        "min_off_time": 10,
+                        "temp_sample_count": 3,
+                        "control_interval": 180
+                    }
+                }
+            }
+        }
+    }
+)
 async def get_thermostat_config():
-    """Get current thermostat configuration"""
+    """
+    Retrieve the current thermostat configuration including target temperatures,
+    operating mode, and control parameters.
+
+    Configuration is persisted to `/data/thermostat_config.json` on the host and
+    survives container restarts. Settings can be modified via POST to this endpoint
+    or by editing the JSON file directly (requires container restart to take effect).
+
+    **Configuration Parameters:**
+
+    - `target_temp`: Temperature setpoint for AUTO mode (18-24°C)
+    - `eco_temp`: Temperature setpoint for ECO mode (18-24°C, must be ≤ target_temp)
+    - `mode`: Operating mode (AUTO/ECO/ON/OFF)
+    - `hysteresis`: Symmetric deadband around target (0.1-2.0°C)
+    - `min_on_time`: Minimum heating duration in minutes (1-120)
+    - `min_off_time`: Minimum idle duration in minutes (1-120)
+    - `temp_sample_count`: Number of samples to average (1-10, reduces noise)
+    - `control_interval`: Control loop cycle time in seconds (60-600)
+
+    **Typical Values for Different Systems:**
+
+    - **Underfloor heating**: hysteresis=0.5°C, min_on_time=30min, samples=3-5
+    - **Radiators**: hysteresis=0.3°C, min_on_time=15min, samples=2-3
+    - **Fan heaters**: hysteresis=0.2°C, min_on_time=5min, samples=1-2
+    """
     return thermostat_manager.get_config()
 
-@app.post("/api/v1/thermostat/config", response_model=ThermostatConfig, summary="Set Thermostat Configuration")
+@app.post(
+    "/api/v1/thermostat/config",
+    response_model=ThermostatConfig,
+    summary="Update Thermostat Configuration",
+    tags=["Thermostat Control"],
+    responses={
+        200: {
+            "description": "Configuration updated successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "target_temp": 22.0,
+                        "eco_temp": 18.0,
+                        "mode": "AUTO",
+                        "hysteresis": 0.5,
+                        "min_on_time": 30,
+                        "min_off_time": 10,
+                        "temp_sample_count": 3,
+                        "control_interval": 180
+                    }
+                }
+            }
+        },
+        422: {
+            "description": "Validation error (e.g., eco_temp > target_temp)"
+        },
+        500: {
+            "description": "Error saving configuration to file"
+        }
+    }
+)
 async def set_thermostat_config(config: ThermostatConfig):
-    """Update thermostat configuration (writes to persistent JSON file on host)"""
+    """
+    Update thermostat configuration and persist to file.
+
+    The new configuration is:
+    1. Validated by Pydantic (all range checks, eco_temp ≤ target_temp)
+    2. Written to `/data/thermostat_config.json` on the host
+    3. Applied immediately to the control loop (no restart needed)
+    4. Returned in the response for confirmation
+
+    **Common Use Cases:**
+
+    - Change mode: `{"mode": "ECO"}` (switch to energy-saving mode)
+    - Adjust target: `{"target_temp": 23.0}` (increase comfort temperature)
+    - Fine-tune control: `{"hysteresis": 0.3, "min_on_time": 20}` (faster response)
+    - Override manual: `{"mode": "OFF"}` (disable heating completely)
+
+    **Validation Rules:**
+
+    - `target_temp`: 18-24°C
+    - `eco_temp`: 18-24°C and ≤ target_temp
+    - `hysteresis`: 0.1-2.0°C
+    - `min_on_time`, `min_off_time`: 1-120 minutes
+    - `temp_sample_count`: 1-10 samples
+    - `control_interval`: 60-600 seconds
+
+    Changes take effect on the next control loop iteration (typically within 3 minutes).
+    """
     try:
         thermostat_manager.set_config(config)
         return thermostat_manager.get_config()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error saving configuration: {str(e)}")
 
-@app.get("/api/v1/thermostat/status", response_model=ThermostatStatus, summary="Get Thermostat Status")
+@app.get(
+    "/api/v1/thermostat/status",
+    response_model=ThermostatStatus,
+    summary="Get Comprehensive Thermostat Status",
+    tags=["Thermostat Control"],
+    responses={
+        200: {
+            "description": "Complete thermostat status",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "config": {
+                            "target_temp": 22.0,
+                            "eco_temp": 18.0,
+                            "mode": "AUTO",
+                            "hysteresis": 0.5,
+                            "min_on_time": 30,
+                            "min_off_time": 10,
+                            "temp_sample_count": 3,
+                            "control_interval": 180
+                        },
+                        "current_temp": 21.2,
+                        "all_temps": {
+                            "temp_outdoor": 15.3,
+                            "temp_indoor": 21.2,
+                            "temp_buffer": 19.8
+                        },
+                        "switch_state": True,
+                        "active_target": 22.0,
+                        "heating_needed": True,
+                        "reason": "Heating: 21.2°C < 21.5°C (already ON, running 15/30min)",
+                        "switch_locked_until": "2025-10-08T12:45:00Z"
+                    }
+                }
+            }
+        },
+        503: {
+            "description": "Shelly device unreachable",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Cannot reach Shelly device: Connection timeout"
+                    }
+                }
+            }
+        }
+    }
+)
 async def get_thermostat_status():
-    """Get current thermostat status including all sensor temperatures and switch state"""
+    """
+    Get a complete snapshot of the thermostat system state.
+
+    Returns comprehensive information including:
+    - Current configuration (all settings)
+    - All sensor temperatures (outdoor, indoor, buffer)
+    - Current switch state (ON/OFF)
+    - Control decision and detailed reasoning
+    - Timing lock status (if applicable)
+
+    **Use Cases:**
+
+    - **Dashboard display**: Shows current state and all temperatures
+    - **Troubleshooting**: Understand why heating is or isn't running
+    - **Timing verification**: Check if switch is locked by min_on_time/min_off_time
+    - **Mode verification**: Confirm which mode is active and target temperature
+
+    **Control Decision Reasoning Examples:**
+
+    - `"Turning ON: 21.2°C < 21.5°C (OFF for 15min >= 10min)"` - Temperature below threshold, off long enough, starting heat
+    - `"Heating needed but locked OFF (idle 5/10min, 5min remaining)"` - Wants to heat but still locked
+    - `"Temperature 21.8°C in deadband [21.5°C - 22.5°C], maintaining ON"` - In deadband, keeping current state
+    - `"Manual override: Switch forced ON"` - Mode=ON, manual control active
+
+    **Performance:**
+    Queries InfluxDB for latest sensor data (5min window) and Shelly for switch status.
+    Typical response time: 50-150ms.
+    """
     try:
         config = thermostat_manager.get_config()
         state = thermostat_manager.get_state()
@@ -565,11 +969,55 @@ async def get_thermostat_status():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting thermostat status: {str(e)}")
 
-@app.post("/api/v1/thermostat/switch", summary="Manual Switch Control")
+@app.post(
+    "/api/v1/thermostat/switch",
+    summary="Manual Switch Control",
+    tags=["Thermostat Control"],
+    responses={
+        200: {
+            "description": "Switch control successful",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "success": True,
+                        "switch_on": True,
+                        "shelly_response": {"was_on": False},
+                        "note": "Switch set manually - will be controlled by configured mode on next cycle"
+                    }
+                }
+            }
+        },
+        503: {
+            "description": "Cannot reach Shelly device"
+        }
+    }
+)
 async def control_switch(turn_on: bool):
     """
-    Manually control the switch (overrides AUTO/ECO mode temporarily)
-    Note: This does NOT change the mode - switch will be controlled by mode on next status check
+    Manually control the Shelly Pro 2 switch (temporary override).
+
+    **Important Behavior:**
+    - This endpoint provides **temporary** manual control
+    - Does NOT change the operating mode
+    - The control loop will override this on its next cycle (typically 3 minutes)
+    - For permanent manual control, use `POST /api/v1/thermostat/config` with mode=ON or mode=OFF
+
+    **Use Cases:**
+    - Quick testing of switch control
+    - Emergency manual override
+    - Temporary adjustments without changing mode
+
+    **Parameters:**
+    - `turn_on`: Boolean - true to turn switch ON (heating), false to turn OFF
+
+    **Example:**
+    ```
+    curl -X POST "http://localhost:8001/api/v1/thermostat/switch?turn_on=true"
+    ```
+
+    **For Permanent Control:**
+    To force heating ON permanently: `POST /api/v1/thermostat/config` with `{"mode": "ON"}`
+    To disable heating permanently: `POST /api/v1/thermostat/config` with `{"mode": "OFF"}`
     """
     try:
         result = shelly_controller.set_switch(turn_on)

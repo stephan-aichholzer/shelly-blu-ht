@@ -30,14 +30,52 @@ class ThermostatMode(str, Enum):
 
 # Data models
 class ThermostatConfig(BaseModel):
-    target_temp: float = Field(22.0, ge=18.0, le=24.0, description="Target temperature for AUTO mode (18-24°C)")
-    eco_temp: float = Field(18.0, ge=18.0, le=24.0, description="Target temperature for ECO mode (18-24°C)")
-    mode: ThermostatMode = Field(ThermostatMode.AUTO, description="Operating mode: AUTO, ECO, ON, OFF")
-    hysteresis: float = Field(0.5, ge=0.1, le=2.0, description="Temperature hysteresis in °C (symmetric)")
-    min_on_time: int = Field(30, ge=1, le=120, description="Minimum ON time in minutes")
-    min_off_time: int = Field(10, ge=1, le=120, description="Minimum OFF time in minutes")
-    temp_sample_count: int = Field(3, ge=1, le=10, description="Number of temperature samples to average (reduces noise)")
-    control_interval: int = Field(180, ge=60, le=600, description="Control loop interval in seconds (default: 180s/3min)")
+    target_temp: float = Field(
+        22.0,
+        ge=18.0,
+        le=24.0,
+        description="Target temperature for AUTO mode in Celsius. This is the desired room temperature when mode=AUTO. Valid range: 18-24°C"
+    )
+    eco_temp: float = Field(
+        18.0,
+        ge=18.0,
+        le=24.0,
+        description="Target temperature for ECO mode in Celsius. Typically set lower than target_temp for energy savings when away. Must be ≤ target_temp. Valid range: 18-24°C"
+    )
+    mode: ThermostatMode = Field(
+        ThermostatMode.AUTO,
+        description="Operating mode: AUTO (temperature control with target_temp), ECO (temperature control with eco_temp), ON (force heating), OFF (force off)"
+    )
+    hysteresis: float = Field(
+        0.5,
+        ge=0.1,
+        le=2.0,
+        description="Symmetric hysteresis (deadband) in °C. Creates turn-on threshold at (target - hysteresis) and turn-off at (target + hysteresis). Prevents oscillation. Typical: 0.3-0.5°C. Valid range: 0.1-2.0°C"
+    )
+    min_on_time: int = Field(
+        30,
+        ge=1,
+        le=120,
+        description="Minimum heating duration in minutes. Once heating starts, it cannot turn off until this time elapses. Protects equipment from rapid cycling. Typical: 15-30min for radiators, 30-60min for underfloor. Valid range: 1-120 minutes"
+    )
+    min_off_time: int = Field(
+        10,
+        ge=1,
+        le=120,
+        description="Minimum idle duration in minutes. Once heating stops, it cannot restart until this time elapses. Prevents rapid cycling. Typical: 5-15min. Valid range: 1-120 minutes"
+    )
+    temp_sample_count: int = Field(
+        3,
+        ge=1,
+        le=10,
+        description="Number of recent temperature samples to average for control decisions. Higher values = more stable but slower response. Use higher for slow systems (underfloor). Typical: 1-3. Valid range: 1-10"
+    )
+    control_interval: int = Field(
+        180,
+        ge=60,
+        le=600,
+        description="Control loop execution interval in seconds. How often the system checks temperature and updates switch state. Typical: 180s (3 minutes). Valid range: 60-600 seconds"
+    )
 
     @validator('eco_temp')
     def eco_temp_must_be_valid(cls, v, values):
@@ -45,22 +83,93 @@ class ThermostatConfig(BaseModel):
             raise ValueError('eco_temp must be <= target_temp')
         return v
 
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "target_temp": 22.0,
+                "eco_temp": 18.0,
+                "mode": "AUTO",
+                "hysteresis": 0.5,
+                "min_on_time": 30,
+                "min_off_time": 10,
+                "temp_sample_count": 3,
+                "control_interval": 180
+            }
+        }
+
 
 class ThermostatState(BaseModel):
-    switch_on: bool = False
-    last_switch_change: Optional[datetime] = None
-    last_control_decision: Optional[str] = None
+    switch_on: bool = Field(
+        False,
+        description="Current switch state: True=ON/heating, False=OFF/idle"
+    )
+    last_switch_change: Optional[datetime] = Field(
+        None,
+        description="UTC timestamp of last switch state change, used for timing constraint enforcement"
+    )
+    last_control_decision: Optional[str] = Field(
+        None,
+        description="Human-readable description of the last control decision made by the system"
+    )
 
 
 class ThermostatStatus(BaseModel):
-    config: ThermostatConfig
-    current_temp: Optional[float] = None
-    all_temps: Dict[str, Optional[float]] = {}
-    switch_state: bool
-    active_target: float
-    heating_needed: Optional[bool] = None
-    reason: Optional[str] = None
-    switch_locked_until: Optional[datetime] = None
+    config: ThermostatConfig = Field(
+        description="Current thermostat configuration"
+    )
+    current_temp: Optional[float] = Field(
+        None,
+        description="Current indoor temperature in Celsius (averaged over temp_sample_count samples). This is the temperature used for control decisions. None if no data available."
+    )
+    all_temps: Dict[str, Optional[float]] = Field(
+        default_factory=dict,
+        description="All available temperature sensors with their latest readings in Celsius. Keys are sensor names (e.g., 'temp_indoor', 'temp_outdoor', 'temp_buffer')."
+    )
+    switch_state: bool = Field(
+        description="Current switch state: true=ON/heating, false=OFF/idle. This reflects the actual state of the Shelly Pro 2 relay controlling your heating device."
+    )
+    active_target: float = Field(
+        description="Active target temperature in Celsius based on current mode. Returns target_temp for AUTO mode, eco_temp for ECO mode, or target_temp for ON/OFF modes."
+    )
+    heating_needed: Optional[bool] = Field(
+        None,
+        description="Control decision: true=heating needed, false=heating not needed, null=not applicable (manual mode or no data). This is the system's recommendation based on temperature and timing constraints."
+    )
+    reason: Optional[str] = Field(
+        None,
+        description="Human-readable explanation of the current control decision. Examples: 'Turning ON: 21.2°C < 21.5°C (OFF for 15min >= 10min)', 'Heating needed but locked OFF (5min remaining)'"
+    )
+    switch_locked_until: Optional[datetime] = Field(
+        None,
+        description="ISO timestamp when switch will be unlocked and allowed to change state. Present when timing constraints (min_on_time/min_off_time) are preventing a state change. Null if switch is not locked."
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "config": {
+                    "target_temp": 22.0,
+                    "eco_temp": 18.0,
+                    "mode": "AUTO",
+                    "hysteresis": 0.5,
+                    "min_on_time": 30,
+                    "min_off_time": 10,
+                    "temp_sample_count": 3,
+                    "control_interval": 180
+                },
+                "current_temp": 21.2,
+                "all_temps": {
+                    "temp_outdoor": 15.3,
+                    "temp_indoor": 21.2,
+                    "temp_buffer": 19.8
+                },
+                "switch_state": True,
+                "active_target": 22.0,
+                "heating_needed": True,
+                "reason": "Heating: 21.2°C < 21.5°C (already ON, running 15/30min)",
+                "switch_locked_until": "2025-10-08T12:45:00Z"
+            }
+        }
 
 
 class ThermostatManager:
