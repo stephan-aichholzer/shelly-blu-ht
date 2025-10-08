@@ -245,5 +245,7 @@ control_loop_state = {
     "running": False,
     "last_run": None,
     "last_error": None,
-    "consecutive_errors": 0
+    "consecutive_errors": 0,
+    "last_mode": None,  # Track mode changes
+    "mode_action_done": False  # Track if mode entry action completed
 }

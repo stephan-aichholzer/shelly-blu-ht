@@ -70,25 +70,53 @@ Logs are stored in: `/var/lib/docker/containers/<container-id>/`
 INFO:main:Averaging 5 temperature samples: ['22.1', '22.1', '22.1', '22.1', '22.1'] -> 22.10°C
 ```
 
-### Control Decisions
-
-**With Timing Information (shows runtime/idle time and remaining lock time):**
+### Mode Changes
 
 ```
-INFO:main:Control decision: Heating: 21.7°C < 21.8°C (already ON, running 5/30min)
-INFO:main:Control decision: Target reached: 22.5°C >= 22.2°C (already OFF, idle 12/10min)
-INFO:main:Control decision: Temperature 21.9°C in deadband [21.8°C - 22.2°C], maintaining ON (running 20/30min)
-INFO:main:Control decision: Temperature 21.9°C in deadband [21.8°C - 22.2°C], maintaining OFF (idle 8/10min)
-INFO:main:Control decision: Turning ON: 21.7°C < 21.8°C (OFF for 12min >= 10min)
-INFO:main:Control decision: Turning OFF: 22.5°C >= 22.2°C (ON for 35min >= 30min)
-INFO:main:Control decision: Heating needed but locked OFF (idle 5/10min, 5min remaining)
-INFO:main:Control decision: Target reached but locked ON (running 15/30min, 15min remaining)
+INFO:main:Mode changed to AUTO
+INFO:main:Mode changed to OFF
+INFO:main:Entering ON mode - turning switch ON once
+INFO:main:Entering OFF mode - turning switch OFF once
+```
+
+### Control Decisions (AUTO/ECO Mode)
+
+**With Mode and Timing Information:**
+
+```
+INFO:main:Mode=AUTO, Temp=21.2°C, Control decision: Heating: 21.7°C < 21.8°C (already ON, running 5/30min)
+INFO:main:Mode=ECO, Temp=17.5°C, Control decision: Turning ON: 17.5°C < 17.5°C (OFF for 12min >= 10min)
+INFO:main:Mode=AUTO, Temp=22.5°C, Control decision: Target reached: 22.5°C >= 22.2°C (already OFF, idle 12/10min)
+INFO:main:Mode=AUTO, Temp=21.9°C, Control decision: Temperature 21.9°C in deadband [21.8°C - 22.2°C], maintaining ON (running 20/30min)
+INFO:main:Mode=AUTO, Temp=21.9°C, Control decision: Temperature 21.9°C in deadband [21.8°C - 22.2°C], maintaining OFF (idle 8/10min)
+INFO:main:Mode=AUTO, Temp=21.7°C, Control decision: Turning ON: 21.7°C < 21.8°C (OFF for 12min >= 10min)
+INFO:main:Mode=AUTO, Temp=22.5°C, Control decision: Turning OFF: 22.5°C >= 22.2°C (ON for 35min >= 30min)
+INFO:main:Mode=AUTO, Temp=21.5°C, Control decision: Heating needed but locked OFF (idle 5/10min, 5min remaining)
+INFO:main:Mode=AUTO, Temp=22.5°C, Control decision: Target reached but locked ON (running 15/30min, 15min remaining)
 ```
 
 **Format:**
+- `Mode=AUTO/ECO` = Current operating mode
+- `Temp=X.X°C` = Current averaged indoor temperature
 - `(running X/Ymin)` = Switch ON for X minutes, minimum ON time is Y minutes
 - `(idle X/Ymin)` = Switch OFF for X minutes, minimum OFF time is Y minutes
 - `(X/Ymin, Zmin remaining)` = When locked, shows remaining time until action allowed
+
+### Manual Mode Monitoring (ON/OFF Mode)
+
+**Control loop continues running but only monitors (doesn't force switch state):**
+
+```
+INFO:main:Mode=ON, Switch=ON - no action (manual mode)
+INFO:main:Mode=ON, Switch=OFF - no action (manual mode)
+INFO:main:Mode=OFF, Switch=OFF - no action (manual mode)
+INFO:main:Mode=OFF, Switch=ON - manual override detected, ignoring
+```
+
+**Behavior:**
+- **ON mode**: Turns switch ON once when entering mode, then monitors without forcing
+- **OFF mode**: Turns switch OFF once when entering mode, then monitors without forcing
+- **Manual override**: If someone manually changes the switch in ON/OFF mode, it's detected and logged but NOT overridden
 ```
 
 ### Switch Actions

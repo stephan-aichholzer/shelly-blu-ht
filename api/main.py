@@ -607,26 +607,58 @@ async def thermostat_control_loop():
             # Get current configuration
             config = thermostat_manager.get_config()
 
-            # Skip control loop if mode is manual (ON/OFF)
-            if config.mode == ThermostatMode.ON:
-                logger.debug("Mode is ON - forcing switch ON")
-                try:
-                    result = shelly_controller.set_switch(True)
-                    if result.get("output") is True:
-                        thermostat_manager.update_state(True, "Manual mode: ON")
-                        THERMOSTAT_SWITCH_STATE.set(1)
-                except Exception as e:
-                    logger.error(f"Error forcing switch ON: {e}")
+            # Detect mode changes
+            if control_loop_state["last_mode"] != config.mode:
+                logger.info(f"Mode changed to {config.mode.value}")
+                control_loop_state["last_mode"] = config.mode
+                control_loop_state["mode_action_done"] = False  # Reset flag on mode change
 
+            # Handle ON mode - turn switch ON once, then just monitor
+            if config.mode == ThermostatMode.ON:
+                switch_status = shelly_controller.get_switch_status()
+                current_switch_on = switch_status.get("output", False)
+
+                if not control_loop_state["mode_action_done"]:
+                    logger.info("Entering ON mode - turning switch ON once")
+                    try:
+                        result = shelly_controller.set_switch(True)
+                        await asyncio.sleep(0.2)
+                        verify_status = shelly_controller.get_switch_status()
+                        if verify_status.get("output") is True:
+                            thermostat_manager.update_state(True, "Manual mode: ON")
+                            THERMOSTAT_SWITCH_STATE.set(1)
+                            control_loop_state["mode_action_done"] = True
+                            logger.info("Switch successfully set to ON")
+                    except Exception as e:
+                        logger.error(f"Error forcing switch ON: {e}")
+                else:
+                    # Just monitor and log
+                    logger.info(f"Mode=ON, Switch={'ON' if current_switch_on else 'OFF'} - no action (manual mode)")
+
+            # Handle OFF mode - turn switch OFF once, then just monitor
             elif config.mode == ThermostatMode.OFF:
-                logger.debug("Mode is OFF - forcing switch OFF")
-                try:
-                    result = shelly_controller.set_switch(False)
-                    if result.get("output") is False:
-                        thermostat_manager.update_state(False, "Manual mode: OFF")
-                        THERMOSTAT_SWITCH_STATE.set(0)
-                except Exception as e:
-                    logger.error(f"Error forcing switch OFF: {e}")
+                switch_status = shelly_controller.get_switch_status()
+                current_switch_on = switch_status.get("output", False)
+
+                if not control_loop_state["mode_action_done"]:
+                    logger.info("Entering OFF mode - turning switch OFF once")
+                    try:
+                        result = shelly_controller.set_switch(False)
+                        await asyncio.sleep(0.2)
+                        verify_status = shelly_controller.get_switch_status()
+                        if verify_status.get("output") is False:
+                            thermostat_manager.update_state(False, "Manual mode: OFF")
+                            THERMOSTAT_SWITCH_STATE.set(0)
+                            control_loop_state["mode_action_done"] = True
+                            logger.info("Switch successfully set to OFF")
+                    except Exception as e:
+                        logger.error(f"Error forcing switch OFF: {e}")
+                else:
+                    # Just monitor and log - detect manual override
+                    if current_switch_on:
+                        logger.info(f"Mode=OFF, Switch=ON - manual override detected, ignoring")
+                    else:
+                        logger.info(f"Mode=OFF, Switch=OFF - no action (manual mode)")
 
             elif config.mode in [ThermostatMode.AUTO, ThermostatMode.ECO]:
                 # Get last N temperature samples and average them for slow-responding systems
@@ -685,7 +717,7 @@ async def thermostat_control_loop():
                         min_off_time=config.min_off_time
                     )
 
-                    logger.info(f"Control decision: {reason}")
+                    logger.info(f"Mode={config.mode.value}, Temp={indoor_temp:.1f}°C, Control decision: {reason}")
 
                     # Execute switch control if state should change
                     if should_be_on != current_switch_on:
