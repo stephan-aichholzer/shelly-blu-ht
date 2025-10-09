@@ -319,26 +319,26 @@ def calculate_control_decision(
     turn_on_threshold = target_temp - hysteresis
     turn_off_threshold = target_temp + hysteresis
 
-    # Check if we're in the deadband
-    if turn_on_threshold <= current_temp < turn_off_threshold:
+    # Check if we're in the deadband (strictly between thresholds, not including boundaries)
+    if turn_on_threshold < current_temp < turn_off_threshold:
         # In deadband - maintain current state
         if current_switch_on:
-            return current_switch_on, f"Temperature {current_temp:.1f}°C in deadband [{turn_on_threshold:.1f}°C - {turn_off_threshold:.1f}°C], maintaining ON (running {time_since_change:.0f}/{min_on_time}min)"
+            return current_switch_on, f"Temperature {current_temp:.1f}°C in deadband ({turn_on_threshold:.1f}°C - {turn_off_threshold:.1f}°C), maintaining ON (running {time_since_change:.0f}/{min_on_time}min)"
         else:
-            return current_switch_on, f"Temperature {current_temp:.1f}°C in deadband [{turn_on_threshold:.1f}°C - {turn_off_threshold:.1f}°C], maintaining OFF (idle {time_since_change:.0f}/{min_off_time}min)"
+            return current_switch_on, f"Temperature {current_temp:.1f}°C in deadband ({turn_on_threshold:.1f}°C - {turn_off_threshold:.1f}°C), maintaining OFF (idle {time_since_change:.0f}/{min_off_time}min)"
 
-    # Temperature is below turn-on threshold
-    if current_temp < turn_on_threshold:
+    # Temperature is at or below turn-on threshold
+    if current_temp <= turn_on_threshold:
         if current_switch_on:
             # Already heating - show when it will turn off
             return True, f"Heating ON: {current_temp:.1f}°C, will turn OFF at {turn_off_threshold:.1f}°C (target {target_temp:.1f}°C + {hysteresis:.1f}°C hysteresis, running {time_since_change:.0f}/{min_on_time}min)"
         else:
             # Want to turn ON, check min_off_time
             if time_since_change >= min_off_time:
-                return True, f"Turning ON: {current_temp:.1f}°C < {turn_on_threshold:.1f}°C (target {target_temp:.1f}°C - {hysteresis:.1f}°C, OFF for {time_since_change:.0f}min >= {min_off_time}min)"
+                return True, f"Turning ON: {current_temp:.1f}°C <= {turn_on_threshold:.1f}°C (target {target_temp:.1f}°C - {hysteresis:.1f}°C, OFF for {time_since_change:.0f}min >= {min_off_time}min)"
             else:
                 remaining = min_off_time - time_since_change
-                return False, f"Heating needed but locked OFF: {current_temp:.1f}°C < {turn_on_threshold:.1f}°C (target {target_temp:.1f}°C - {hysteresis:.1f}°C, idle {time_since_change:.0f}/{min_off_time}min, {remaining:.0f}min remaining)"
+                return False, f"Heating needed but locked OFF: {current_temp:.1f}°C <= {turn_on_threshold:.1f}°C (target {target_temp:.1f}°C - {hysteresis:.1f}°C, idle {time_since_change:.0f}/{min_off_time}min, {remaining:.0f}min remaining)"
 
     # Temperature is at or above turn-off threshold
     if current_temp >= turn_off_threshold:
