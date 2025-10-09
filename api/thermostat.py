@@ -315,9 +315,9 @@ def calculate_control_decision(
     else:
         time_since_change = float('inf')  # No previous change, allow any action
 
-    # Temperature thresholds
-    turn_on_threshold = target_temp - hysteresis
-    turn_off_threshold = target_temp + hysteresis
+    # Temperature thresholds (round to 1 decimal to avoid floating-point comparison issues)
+    turn_on_threshold = round(target_temp - hysteresis, 1)
+    turn_off_threshold = round(target_temp + hysteresis, 1)
 
     # Check if we're in the deadband (strictly between thresholds, not including boundaries)
     if turn_on_threshold < current_temp < turn_off_threshold:
