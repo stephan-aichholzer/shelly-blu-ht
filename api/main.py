@@ -529,40 +529,46 @@ async def get_latest_readings():
     Queries the last hour of data to find most recent values.
     """
     try:
-        query = f'''
-        from(bucket: "{INFLUXDB_BUCKET}")
-        |> range(start: -1h)
-        |> filter(fn: (r) => r._measurement == "temperature" or r._measurement == "humidity" or r._measurement == "battery")
-        |> group(columns: ["device_id", "sensor_id", "_measurement"])
-        |> last()
-        |> group()
-        '''
-
-        result = query_api.query(query)
         latest_readings = {}
 
-        for table in result:
-            for record in table.records:
-                device_id = record.values.get("device_id", "unknown")
-                sensor_id = record.values.get("sensor_id", "unknown")
-                measurement = record.get_measurement()
-                value = record.get_value()
-                timestamp = record.get_time()
+        # Query each measurement type separately to avoid schema collision
+        # (temperature/humidity are float, battery is int)
+        measurements = ["temperature", "humidity", "battery"]
 
-                key = (device_id, sensor_id)
-                if key not in latest_readings:
-                    latest_readings[key] = {
-                        "device_id": device_id,
-                        "sensor_id": sensor_id,
-                        "timestamp": timestamp,
-                        "readings": {}
-                    }
+        for measurement in measurements:
+            query = f'''
+            from(bucket: "{INFLUXDB_BUCKET}")
+            |> range(start: -1h)
+            |> filter(fn: (r) => r._measurement == "{measurement}")
+            |> group(columns: ["gateway_id", "sensor_id"])
+            |> last()
+            '''
 
-                latest_readings[key]["readings"][measurement] = value
+            result = query_api.query(query, org=INFLUXDB_ORG)
 
-                # Update timestamp if this reading is newer
-                if timestamp > latest_readings[key]["timestamp"]:
-                    latest_readings[key]["timestamp"] = timestamp
+            for table in result:
+                for record in table.records:
+                    gateway_id = record.values.get("gateway_id", "unknown")
+                    sensor_id = record.values.get("sensor_id", "unknown")
+                    sensor_name = record.values.get("sensor_name", "unknown")
+                    value = record.get_value()
+                    timestamp = record.get_time()
+
+                    key = (gateway_id, sensor_id)
+                    if key not in latest_readings:
+                        latest_readings[key] = {
+                            "gateway_id": gateway_id,
+                            "sensor_id": sensor_id,
+                            "sensor_name": sensor_name,
+                            "timestamp": timestamp,
+                            "readings": {}
+                        }
+
+                    latest_readings[key]["readings"][measurement] = value
+
+                    # Update timestamp if this reading is newer
+                    if timestamp > latest_readings[key]["timestamp"]:
+                        latest_readings[key]["timestamp"] = timestamp
 
         return list(latest_readings.values())
 

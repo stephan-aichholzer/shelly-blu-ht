@@ -330,26 +330,26 @@ def calculate_control_decision(
     # Temperature is below turn-on threshold
     if current_temp < turn_on_threshold:
         if current_switch_on:
-            return True, f"Heating: {current_temp:.1f}°C < {turn_on_threshold:.1f}°C (already ON, running {time_since_change:.0f}/{min_on_time}min)"
+            return True, f"Heating: {current_temp:.1f}°C < {turn_on_threshold:.1f}°C (target {target_temp:.1f}°C - {hysteresis:.1f}°C, already ON, running {time_since_change:.0f}/{min_on_time}min)"
         else:
             # Want to turn ON, check min_off_time
             if time_since_change >= min_off_time:
-                return True, f"Turning ON: {current_temp:.1f}°C < {turn_on_threshold:.1f}°C (OFF for {time_since_change:.0f}min >= {min_off_time}min)"
+                return True, f"Turning ON: {current_temp:.1f}°C < {turn_on_threshold:.1f}°C (target {target_temp:.1f}°C - {hysteresis:.1f}°C, OFF for {time_since_change:.0f}min >= {min_off_time}min)"
             else:
                 remaining = min_off_time - time_since_change
-                return False, f"Heating needed but locked OFF (idle {time_since_change:.0f}/{min_off_time}min, {remaining:.0f}min remaining)"
+                return False, f"Heating needed but locked OFF: {current_temp:.1f}°C < {turn_on_threshold:.1f}°C (target {target_temp:.1f}°C - {hysteresis:.1f}°C, idle {time_since_change:.0f}/{min_off_time}min, {remaining:.0f}min remaining)"
 
     # Temperature is at or above turn-off threshold
     if current_temp >= turn_off_threshold:
         if not current_switch_on:
-            return False, f"Target reached: {current_temp:.1f}°C >= {turn_off_threshold:.1f}°C (already OFF, idle {time_since_change:.0f}/{min_off_time}min)"
+            return False, f"Target reached: {current_temp:.1f}°C >= {turn_off_threshold:.1f}°C (target {target_temp:.1f}°C + {hysteresis:.1f}°C, already OFF, idle {time_since_change:.0f}/{min_off_time}min)"
         else:
             # Want to turn OFF, check min_on_time
             if time_since_change >= min_on_time:
-                return False, f"Turning OFF: {current_temp:.1f}°C >= {turn_off_threshold:.1f}°C (ON for {time_since_change:.0f}min >= {min_on_time}min)"
+                return False, f"Turning OFF: {current_temp:.1f}°C >= {turn_off_threshold:.1f}°C (target {target_temp:.1f}°C + {hysteresis:.1f}°C, ON for {time_since_change:.0f}min >= {min_on_time}min)"
             else:
                 remaining = min_on_time - time_since_change
-                return True, f"Target reached but locked ON (running {time_since_change:.0f}/{min_on_time}min, {remaining:.0f}min remaining)"
+                return True, f"Target reached but locked ON: {current_temp:.1f}°C >= {turn_off_threshold:.1f}°C (target {target_temp:.1f}°C + {hysteresis:.1f}°C, running {time_since_change:.0f}/{min_on_time}min, {remaining:.0f}min remaining)"
 
     # Should not reach here, but maintain current state as fallback
     return current_switch_on, f"Maintaining current state (unexpected condition)"
