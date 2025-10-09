@@ -1129,20 +1129,16 @@ async def thermostat_control_loop():
 
                 temp_result = query_api.query(temp_query, org=INFLUXDB_ORG)
                 temps = []
-                timestamps = []
 
                 for table in temp_result:
                     for record in table.records:
                         temps.append(record.get_value())
-                        timestamps.append(record.get_time())
 
                 # Average the samples (or fewer if not enough data yet)
                 indoor_temp = sum(temps) / len(temps) if temps else None
 
                 if indoor_temp and len(temps) > 1:
-                    # Log with timestamps for debugging
-                    temp_with_time = [f"{t.strftime('%H:%M:%S')}={v:.1f}" for t, v in zip(timestamps, temps)]
-                    logger.info(f"Averaging {len(temps)} temperature samples: {temp_with_time} -> {indoor_temp:.2f}°C")
+                    logger.info(f"Averaging {len(temps)} temperature samples: {[f'{t:.1f}' for t in temps]} -> {indoor_temp:.2f}°C")
 
                 if indoor_temp is None:
                     logger.warning("No indoor temperature data available")

@@ -330,7 +330,8 @@ def calculate_control_decision(
     # Temperature is below turn-on threshold
     if current_temp < turn_on_threshold:
         if current_switch_on:
-            return True, f"Heating: {current_temp:.1f}°C < {turn_on_threshold:.1f}°C (target {target_temp:.1f}°C - {hysteresis:.1f}°C, already ON, running {time_since_change:.0f}/{min_on_time}min)"
+            # Already heating - show when it will turn off
+            return True, f"Heating ON: {current_temp:.1f}°C, will turn OFF at {turn_off_threshold:.1f}°C (target {target_temp:.1f}°C + {hysteresis:.1f}°C hysteresis, running {time_since_change:.0f}/{min_on_time}min)"
         else:
             # Want to turn ON, check min_off_time
             if time_since_change >= min_off_time:
@@ -342,7 +343,8 @@ def calculate_control_decision(
     # Temperature is at or above turn-off threshold
     if current_temp >= turn_off_threshold:
         if not current_switch_on:
-            return False, f"Target reached: {current_temp:.1f}°C >= {turn_off_threshold:.1f}°C (target {target_temp:.1f}°C + {hysteresis:.1f}°C, already OFF, idle {time_since_change:.0f}/{min_off_time}min)"
+            # Already off - show when it will turn on
+            return False, f"Heating OFF: {current_temp:.1f}°C, will turn ON below {turn_on_threshold:.1f}°C (target {target_temp:.1f}°C - {hysteresis:.1f}°C hysteresis, idle {time_since_change:.0f}/{min_off_time}min)"
         else:
             # Want to turn OFF, check min_on_time
             if time_since_change >= min_on_time:
