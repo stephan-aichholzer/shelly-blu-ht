@@ -7,29 +7,25 @@ Provides REST endpoints and Prometheus metrics for sensor data
 import os
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
-
-from fastapi import FastAPI, HTTPException, Query, Response
-from fastapi.responses import PlainTextResponse
-from influxdb_client import InfluxDBClient
-from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
-from pydantic import BaseModel, Field
 import asyncio
 import logging
+
+from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel, Field
+
+# Import from modularized components
+from config import INFLUXDB_URL, INFLUXDB_TOKEN, INFLUXDB_ORG, INFLUXDB_BUCKET, API_VERSION, API_TITLE
+from models import SensorReading, SensorInfo, HealthStatus
+from database import influx_client, query_api
+from metrics import REQUEST_COUNT, REQUEST_DURATION, SENSOR_TEMPERATURE, SENSOR_HUMIDITY, SENSOR_BATTERY, SENSOR_LAST_SEEN, THERMOSTAT_SWITCH_STATE, THERMOSTAT_TARGET_TEMP, THERMOSTAT_CURRENT_TEMP
+from websocket import ws_manager
+from routes import system, monitor
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Prometheus metrics
-REQUEST_COUNT = Counter('api_requests_total', 'Total API requests', ['method', 'endpoint'])
-REQUEST_DURATION = Histogram('api_request_duration_seconds', 'API request duration')
-SENSOR_TEMPERATURE = Gauge('sensor_temperature_celsius', 'Current temperature', ['device_id', 'sensor_id', 'sensor_name'])
-SENSOR_HUMIDITY = Gauge('sensor_humidity_percent', 'Current humidity', ['device_id', 'sensor_id', 'sensor_name'])
-SENSOR_BATTERY = Gauge('sensor_battery_percent', 'Current battery level', ['device_id', 'sensor_id', 'sensor_name'])
-SENSOR_LAST_SEEN = Gauge('sensor_last_seen_timestamp', 'Last seen timestamp', ['device_id', 'sensor_id', 'sensor_name'])
-THERMOSTAT_SWITCH_STATE = Gauge('thermostat_switch_state', 'Thermostat switch state (1=ON, 0=OFF)')
-THERMOSTAT_TARGET_TEMP = Gauge('thermostat_target_temperature_celsius', 'Thermostat target temperature')
-THERMOSTAT_CURRENT_TEMP = Gauge('thermostat_current_temperature_celsius', 'Current indoor temperature used for control')
 
 tags_metadata = [
     {
@@ -156,80 +152,18 @@ An async background task runs every 60-600 seconds (configurable) to:
     }
 )
 
-# Configuration
-INFLUXDB_URL = os.getenv("INFLUXDB_URL", "http://influxdb:8086")
-INFLUXDB_TOKEN = os.getenv("INFLUXDB_TOKEN", "iot-admin-token-12345")
-INFLUXDB_ORG = os.getenv("INFLUXDB_ORG", "iot-org")
-INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "sensor-data")
-
-# InfluxDB client
-influx_client = InfluxDBClient(
-    url=INFLUXDB_URL,
-    token=INFLUXDB_TOKEN,
-    org=INFLUXDB_ORG
+# CORS configuration - allow requests from heat pump UI
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for local network access
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-query_api = influx_client.query_api()
 
-# Data models
-class SensorReading(BaseModel):
-    timestamp: datetime = Field(description="UTC timestamp of the reading")
-    device_id: str = Field(description="Shelly device ID (e.g., '200')")
-    sensor_id: Optional[str] = Field(None, description="Sensor component ID within device")
-    value: float = Field(description="Measurement value (temperature in °C, humidity/battery in %)")
-    unit: str = Field(description="Unit of measurement: 'celsius', 'percent'")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "timestamp": "2025-10-08T12:30:00Z",
-                "device_id": "200",
-                "sensor_id": "0",
-                "value": 21.5,
-                "unit": "celsius"
-            }
-        }
-
-class SensorInfo(BaseModel):
-    device_id: str = Field(description="Shelly device ID")
-    sensor_id: Optional[str] = Field(None, description="Sensor component ID")
-    sensor_type: str = Field(description="Sensor type (e.g., 'bthome' for Shelly BLU H&T)")
-    last_seen: Optional[datetime] = Field(None, description="UTC timestamp of last data received from sensor")
-    measurements: List[str] = Field(description="Available measurement types: 'temperature', 'humidity', 'battery'")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "device_id": "200",
-                "sensor_id": "0",
-                "sensor_type": "bthome",
-                "last_seen": "2025-10-08T12:30:00Z",
-                "measurements": ["temperature", "humidity", "battery"]
-            }
-        }
-
-class HealthStatus(BaseModel):
-    status: str = Field(description="Overall health status: 'healthy' or 'unhealthy'")
-    timestamp: datetime = Field(description="UTC timestamp of health check")
-    version: str = Field(description="API version")
-    influxdb_connected: bool = Field(description="True if InfluxDB is reachable and can query data")
-    shelly_connected: Optional[bool] = Field(None, description="True if Shelly Pro 2 device is reachable")
-    control_loop_running: Optional[bool] = Field(None, description="True if thermostat control loop background task is running")
-    last_control_loop_run: Optional[datetime] = Field(None, description="UTC timestamp of last control loop execution")
-    control_loop_error: Optional[str] = Field(None, description="Last error message from control loop, if any")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "status": "healthy",
-                "timestamp": "2025-10-08T12:30:00Z",
-                "version": "2.0.0",
-                "influxdb_connected": True,
-                "shelly_connected": True,
-                "control_loop_running": True,
-                "last_control_loop_run": "2025-10-08T12:28:00Z",
-                "control_loop_error": None
-            }
-        }
+# Include routers from modularized components
+app.include_router(system.router)
+app.include_router(monitor.router)
 
 # Middleware for metrics
 @app.middleware("http")
@@ -239,88 +173,10 @@ async def metrics_middleware(request, call_next):
         response = await call_next(request)
         return response
 
-@app.get("/", summary="API Information", tags=["System Information"])
-async def root():
-    """Root endpoint with API information"""
-    return {
-        "name": "IoT Temperature Monitoring API",
-        "version": "2.0.0",
-        "endpoints": {
-            "sensors": "/api/v1/sensors",
-            "temperature": "/api/v1/temperature",
-            "humidity": "/api/v1/humidity",
-            "battery": "/api/v1/battery",
-            "latest": "/api/v1/latest",
-            "thermostat_config": "/api/v1/thermostat/config",
-            "thermostat_status": "/api/v1/thermostat/status",
-            "thermostat_switch": "/api/v1/thermostat/switch",
-            "metrics": "/metrics",
-            "health": "/health",
-            "docs": "/docs"
-        }
-    }
-
-@app.get("/health", response_model=HealthStatus, summary="Health Check", tags=["System Information"])
-async def health_check():
-    """
-    Comprehensive health check endpoint that verifies all critical system components.
-
-    Checks performed:
-    - **InfluxDB Connection**: Can query time-series database
-    - **Shelly Connection**: Can reach Shelly Pro 2 device
-    - **Control Loop**: Background task is running and executed recently
-    - **Error State**: No consecutive failures
-
-    Returns 'healthy' status only if all components are operational.
-
-    Used by Docker healthcheck for automatic container restart on failure.
-    """
-    from thermostat import shelly_controller, control_loop_state
-
-    # Test InfluxDB connection
-    try:
-        buckets = influx_client.buckets_api().find_buckets()
-        influxdb_connected = True
-    except Exception:
-        influxdb_connected = False
-
-    # Test Shelly connection
-    shelly_connected = False
-    try:
-        shelly_controller.get_switch_status()
-        shelly_connected = True
-    except Exception:
-        pass
-
-    # Check control loop health
-    now = datetime.utcnow()
-    control_loop_healthy = True
-    control_loop_running = control_loop_state.get("running", False)
-    last_run = control_loop_state.get("last_run")
-    error = control_loop_state.get("last_error")
-
-    # Control loop should run at least every 6 minutes (3min interval + 3min grace)
-    if last_run and (now - last_run).total_seconds() > 360:
-        control_loop_healthy = False
-
-    # Determine overall health
-    is_healthy = (
-        influxdb_connected and
-        shelly_connected and
-        control_loop_healthy and
-        error is None
-    )
-
-    return HealthStatus(
-        status="healthy" if is_healthy else "unhealthy",
-        timestamp=now,
-        version="2.0.0",
-        influxdb_connected=influxdb_connected,
-        shelly_connected=shelly_connected,
-        control_loop_running=control_loop_running,
-        last_control_loop_run=last_run,
-        control_loop_error=error
-    )
+# ==============================================================================
+# SENSOR AND THERMOSTAT ROUTES
+# (To be refactored to routes/sensors.py and routes/thermostat_api.py later)
+# ==============================================================================
 
 @app.get("/api/v1/sensors", response_model=List[SensorInfo], summary="List Sensors", tags=["Sensor Monitoring"])
 async def list_sensors():
@@ -574,112 +430,6 @@ async def get_latest_readings():
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error querying latest readings: {str(e)}")
-
-@app.get("/metrics", response_class=PlainTextResponse, summary="Prometheus Metrics", tags=["Metrics"])
-async def metrics():
-    """
-    Prometheus metrics endpoint in text exposition format.
-
-    Updates all gauge metrics with latest sensor and thermostat values before serving.
-
-    **Sensor Metrics:**
-    - `sensor_temperature_celsius{device_id, sensor_id, sensor_name}`: Current temperature
-    - `sensor_humidity_percent{device_id, sensor_id, sensor_name}`: Current humidity
-    - `sensor_battery_percent{device_id, sensor_id, sensor_name}`: Battery level
-
-    **Thermostat Metrics:**
-    - `thermostat_switch_state`: Switch state (1=ON/heating, 0=OFF)
-    - `thermostat_target_temperature_celsius`: Active target temperature
-    - `thermostat_current_temperature_celsius`: Current averaged indoor temperature
-
-    **API Metrics:**
-    - `api_requests_total{method, endpoint}`: Request counter
-    - `api_request_duration_seconds`: Request duration histogram
-
-    Configure Grafana to scrape this endpoint for real-time dashboards.
-    """
-    # Update Prometheus gauges with latest sensor data before serving metrics
-    await update_prometheus_metrics()
-    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
-
-async def update_prometheus_metrics():
-    """Update Prometheus gauges with latest sensor values from database"""
-    try:
-        # Get latest temperature readings for all sensors
-        temp_query = '''
-        from(bucket: "sensor-data")
-          |> range(start: -5m)
-          |> filter(fn: (r) => r["_measurement"] == "temperature")
-          |> group(columns: ["gateway_id", "sensor_id"])
-          |> last()
-        '''
-
-        temp_result = query_api.query(temp_query, org=INFLUXDB_ORG)
-
-        for table in temp_result:
-            for record in table.records:
-                gateway_id = record.values.get("gateway_id", "unknown")
-                sensor_id = record.values.get("sensor_id", "unknown")
-                sensor_name = record.values.get("sensor_name", "unknown")
-                value = record.get_value()
-
-                SENSOR_TEMPERATURE.labels(
-                    device_id=gateway_id,
-                    sensor_id=sensor_id,
-                    sensor_name=sensor_name
-                ).set(value)
-
-        # Get latest humidity readings
-        humidity_query = '''
-        from(bucket: "sensor-data")
-          |> range(start: -5m)
-          |> filter(fn: (r) => r["_measurement"] == "humidity")
-          |> group(columns: ["gateway_id", "sensor_id"])
-          |> last()
-        '''
-
-        humidity_result = query_api.query(humidity_query, org=INFLUXDB_ORG)
-
-        for table in humidity_result:
-            for record in table.records:
-                gateway_id = record.values.get("gateway_id", "unknown")
-                sensor_id = record.values.get("sensor_id", "unknown")
-                sensor_name = record.values.get("sensor_name", "unknown")
-                value = record.get_value()
-
-                SENSOR_HUMIDITY.labels(
-                    device_id=gateway_id,
-                    sensor_id=sensor_id,
-                    sensor_name=sensor_name
-                ).set(value)
-
-        # Get latest battery readings
-        battery_query = '''
-        from(bucket: "sensor-data")
-          |> range(start: -5m)
-          |> filter(fn: (r) => r["_measurement"] == "battery")
-          |> group(columns: ["gateway_id", "sensor_id"])
-          |> last()
-        '''
-
-        battery_result = query_api.query(battery_query, org=INFLUXDB_ORG)
-
-        for table in battery_result:
-            for record in table.records:
-                gateway_id = record.values.get("gateway_id", "unknown")
-                sensor_id = record.values.get("sensor_id", "unknown")
-                sensor_name = record.values.get("sensor_name", "unknown")
-                value = record.get_value()
-
-                SENSOR_BATTERY.labels(
-                    device_id=gateway_id,
-                    sensor_id=sensor_id,
-                    sensor_name=sensor_name
-                ).set(value)
-
-    except Exception as e:
-        # Log error but don't fail the metrics endpoint
-        print(f"Error updating Prometheus metrics: {e}")
 
 # ============================================================================
 # THERMOSTAT CONTROL ENDPOINTS
@@ -1063,7 +813,9 @@ async def thermostat_control_loop():
 
             # Detect mode changes
             if control_loop_state["last_mode"] != config.mode:
-                logger.info(f"Mode changed to {config.mode.value}")
+                log_msg = f"Mode changed to {config.mode.value}"
+                logger.info(log_msg)
+                await ws_manager.broadcast(f"{datetime.utcnow().isoformat()}Z - {log_msg}")
                 control_loop_state["last_mode"] = config.mode
                 control_loop_state["mode_action_done"] = False  # Reset flag on mode change
 
@@ -1172,11 +924,15 @@ async def thermostat_control_loop():
                         min_off_time=config.min_off_time
                     )
 
-                    logger.info(f"Mode={config.mode.value}, Temp={indoor_temp:.1f}°C, Control decision: {reason}")
+                    log_msg = f"Mode={config.mode.value}, Temp={indoor_temp:.1f}°C, Control decision: {reason}"
+                    logger.info(log_msg)
+                    await ws_manager.broadcast(f"{datetime.utcnow().isoformat()}Z - {log_msg}")
 
                     # Execute switch control if state should change
                     if should_be_on != current_switch_on:
-                        logger.info(f"Changing switch state: {current_switch_on} -> {should_be_on}")
+                        log_msg = f"Changing switch state: {current_switch_on} -> {should_be_on}"
+                        logger.info(log_msg)
+                        await ws_manager.broadcast(f"{datetime.utcnow().isoformat()}Z - {log_msg}")
                         result = shelly_controller.set_switch(should_be_on)
 
                         # Small delay to let switch settle (race condition fix)
@@ -1190,7 +946,9 @@ async def thermostat_control_loop():
 
                         if actual_state == should_be_on:
                             thermostat_manager.update_state(should_be_on, reason)
-                            logger.info(f"Switch successfully set to {'ON' if should_be_on else 'OFF'}")
+                            log_msg = f"Switch successfully set to {'ON' if should_be_on else 'OFF'}"
+                            logger.info(log_msg)
+                            await ws_manager.broadcast(f"{datetime.utcnow().isoformat()}Z - {log_msg}")
                             THERMOSTAT_SWITCH_STATE.set(1 if should_be_on else 0)
                         else:
                             logger.error(f"Switch state mismatch after command: expected {should_be_on}, got {actual_state}")
