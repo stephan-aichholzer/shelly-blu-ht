@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class WebSocketManager:
     """Manages WebSocket connections for live log streaming"""
 
-    def __init__(self, history_size: int = 20):
+    def __init__(self, history_size: int = 30):
         self.active_connections: List[WebSocket] = []
         self.log_history: deque = deque(maxlen=history_size)  # Circular buffer for last N messages
 
