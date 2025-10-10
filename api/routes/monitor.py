@@ -22,12 +22,10 @@ async def websocket_thermostat_logs(websocket: WebSocket):
     Same output as watch_thermostat.sh but accessible via web browser.
     Broadcasts control decisions, mode changes, temperature readings, and errors in real-time.
     """
-    await ws_manager.connect(websocket)
+    await ws_manager.connect(websocket)  # This sends history to client
     try:
-        # Send initial connection message
-        await websocket.send_text(
-            f"{datetime.utcnow().isoformat()}Z - WebSocket connected - waiting for control loop updates..."
-        )
+        # Note: Connection message is sent by ws_manager.connect() along with history
+        # No need to send it here again
 
         # Keep connection alive and wait for broadcasts
         while True:
