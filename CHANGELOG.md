@@ -2,6 +2,66 @@
 
 All notable changes to this project will be documented in this file.
 
+## [5.0.0] - 2025-10-10
+
+### 🏗️ Modular Architecture & WebSocket Monitoring
+
+**Major refactoring for maintainability and new web-based live monitoring.**
+
+### Added
+
+#### Modular Code Organization
+- **Separated FastAPI application** into focused modules (each <300 lines):
+  - `config.py` - Configuration and environment variables
+  - `models.py` - Pydantic data models
+  - `database.py` - InfluxDB client singleton
+  - `metrics.py` - Prometheus metric definitions
+  - `websocket.py` - WebSocket connection manager
+  - `routes/system.py` - /, /health, /metrics endpoints
+  - `routes/monitor.py` - /monitor page + WebSocket endpoint
+- **Benefits**: Clear separation of concerns, easier navigation, better testability
+
+#### WebSocket Live Monitoring
+- **Web-based monitor** at `/monitor` - View control loop logs from any browser
+- **WebSocket endpoint** `/ws/thermostat/logs` for real-time log streaming
+- **30-line history buffer** - Shows recent logs on connect (like `tail -n 30`)
+- **Auto-reconnect** on network issues
+- **Dark theme UI** with color-coded log types (mode, decision, switch, error)
+- **Works on any device** - Desktop, tablet, mobile (no SSH required!)
+
+### Changed
+- **Reduced main.py** from 1249 lines to 987 lines (21% reduction)
+- **Removed duplicate code** - Models, endpoints, client initialization
+- **Fixed floating-point precision bug** in symmetric boundary control
+- **Documentation cleanup** - Removed version-specific files, kept single up-to-date docs
+
+### Fixed
+- **Floating-point boundary bug**: 21.9 - 0.1 = 21.799999999999997 caused boundary issues
+  - Solution: Round thresholds to 1 decimal place
+- **WebSocket timestamp handling**: Clarified connection message vs historical logs
+
+## [4.0.0] - 2025-10-08
+
+### 📚 Comprehensive OpenAPI Documentation
+
+**Enhanced API documentation for better developer experience.**
+
+### Added
+- **Comprehensive OpenAPI metadata** (3,798 characters) explaining system architecture
+- **Tag organization**: 4 endpoint groups (System, Sensors, Thermostat, Metrics)
+- **Enhanced Pydantic models** with detailed field descriptions and examples
+- **Response examples** for all endpoints
+- **Pydantic V2 compatibility**: Migrated `schema_extra` → `json_schema_extra`
+
+### Changed
+- **Temperature sample ordering** - Fixed to chronological order (oldest→newest)
+- **Log message clarity** - Show relevant thresholds with calculations
+
+### Fixed
+- **Schema collision** in `/latest` endpoint - Query measurements separately
+- **Symmetric boundary control** - Turn ON/OFF exactly at boundaries (not below/above)
+- **SD card longevity** - Added log rotation and conditional state writes (95% write reduction)
+
 ## [3.0.0] - 2025-10-07
 
 ### 🌡️ Intelligent Thermostat Control System

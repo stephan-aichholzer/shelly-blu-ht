@@ -1,8 +1,8 @@
-# Architecture v3.0 - Thermostat Control System
+# System Architecture
 
 ## Overview
 
-Version 3.0 extends the v2.0 HTTP polling architecture with intelligent thermostat control capabilities, transforming the system from a passive monitoring solution into an active environmental control system.
+A modular, production-ready IoT temperature monitoring and thermostat control system built on HTTP polling, Docker containers, and modern web technologies. Features intelligent temperature control, real-time monitoring via WebSocket, and comprehensive observability.
 
 ## System Architecture
 
@@ -33,7 +33,7 @@ Version 3.0 extends the v2.0 HTTP polling architecture with intelligent thermost
 └─────────────────────────────────────────────────────────────────┘
                               ↓ Query
 ┌─────────────────────────────────────────────────────────────────┐
-│                   Control Layer (NEW in v3.0)                    │
+│                      Control Layer                               │
 ├─────────────────────────────────────────────────────────────────┤
 │  FastAPI + Thermostat Control Loop (every 60-600s configurable) │
 │  ┌───────────────────────────────────────────────────────────┐  │
@@ -60,7 +60,7 @@ Version 3.0 extends the v2.0 HTTP polling architecture with intelligent thermost
 
 ## Key Design Decisions
 
-### 1. Temperature Averaging (NEW)
+### 1. Temperature Averaging
 
 **Problem:** Slow-responding heating systems (underfloor heating, large radiators) require stable temperature readings to avoid oscillation.
 
@@ -291,9 +291,7 @@ INFO:main:Switch successfully set to ON
 
 ## Network Architecture
 
-**v2.0 Limitation:** Used host network mode to access Shelly, broke Grafana compatibility.
-
-**v3.0 Solution:** Bridge network with `extra_hosts`:
+**Current Solution:** Bridge network with `extra_hosts` to access Shelly on host network:
 
 ```yaml
 api:
@@ -311,9 +309,37 @@ api:
 
 ## API Architecture
 
-**RESTful Design:**
+### Modular Code Organization
+
+The FastAPI application is organized into focused, maintainable modules:
 
 ```
+api/
+├── main.py              # App initialization, sensor/thermostat routes
+├── config.py            # Configuration and environment variables
+├── models.py            # Pydantic data models
+├── database.py          # InfluxDB client singleton
+├── metrics.py           # Prometheus metric definitions
+├── websocket.py         # WebSocket connection manager (30-line history buffer)
+├── thermostat.py        # Thermostat control logic and state management
+└── routes/
+    ├── system.py        # /, /health, /metrics endpoints
+    └── monitor.py       # /monitor page + WebSocket endpoint
+```
+
+**Benefits:**
+- Clear separation of concerns
+- Easy to navigate (<300 lines per file)
+- Better testability
+- Faster development
+
+### RESTful Endpoints
+
+```
+/                        GET     API information
+/monitor                 GET     Web-based live monitor (HTML page)
+/ws/thermostat/logs      WS      Real-time log streaming
+
 /api/v1/
 ├── sensors              GET     List all sensors
 ├── temperature          GET     Temperature history
@@ -328,8 +354,26 @@ api:
 
 /metrics                 GET     Prometheus metrics
 /health                  GET     Health status (extended)
-/docs                    GET     OpenAPI documentation
+/docs                    GET     OpenAPI documentation (Swagger UI)
 ```
+
+### WebSocket Live Monitoring
+
+**Endpoint:** `/ws/thermostat/logs`
+
+**Features:**
+- Broadcasts control loop events in real-time
+- Maintains 30-line circular buffer of recent logs
+- Sends history on connect (like `tail -n 30`)
+- Auto-reconnect on disconnect
+- Simple in-memory storage (no persistence needed)
+
+**Web Interface:** `/monitor`
+- Dark theme, terminal-style UI
+- Color-coded log types (mode, decision, switch, error)
+- Auto-scroll, 500-line display buffer
+- Works on any device with a browser
+- No SSH required for monitoring
 
 **Configuration Endpoint:**
 - GET: Returns current config from JSON file
@@ -346,24 +390,6 @@ Returns comprehensive state:
 - Reason for decision (human-readable)
 - Switch lock status (remaining time)
 
-## Comparison with v2.0
-
-| Feature | v2.0 | v3.0 |
-|---------|------|------|
-| **Purpose** | Monitoring | Monitoring + Control |
-| **Services** | 3 (sensor-poller, influxdb, api) | 3 (same) |
-| **Shelly** | Read-only (sensors) | Read sensors + Control switch |
-| **Control Loop** | None | Async background task |
-| **Modes** | N/A | AUTO, ECO, ON, OFF |
-| **Temperature** | Single sample | Moving average (configurable) |
-| **Safety** | N/A | Hysteresis + timing constraints |
-| **Health Check** | Basic | Extended (includes control loop) |
-| **Logging** | Standard | Structured + rotation |
-| **Config** | Environment vars | JSON file + ENV |
-| **Persistence** | None | Config + state |
-| **API Endpoints** | 6 | 10 (added 4 thermostat) |
-| **Grafana Port** | 8001 | 8001 (fixed in v3.0) |
-
 ## Performance Characteristics
 
 **Control Loop Overhead:**
@@ -372,9 +398,7 @@ Returns comprehensive state:
 - Negligible impact on API response times
 
 **Memory Usage:**
-- v2.0: ~200 MB (API container)
-- v3.0: ~210 MB (API container with thermostat)
-- Increase: ~10 MB (control loop state + JSON config)
+- API container: ~210 MB (FastAPI + thermostat control + WebSocket)
 
 **Disk Usage:**
 - Logs: ~60 MB max (API: 30MB + Sensor-poller: 30MB with rotation)
@@ -448,13 +472,13 @@ Possible v3.1 features:
 
 ## Conclusion
 
-Version 3.0 transforms the system from passive monitoring to active control while maintaining the simplicity principle established in v2.0. The architecture prioritizes:
+The system combines passive monitoring with active thermostat control, maintaining simplicity while adding powerful features. The architecture prioritizes:
 
-1. **Simplicity:** Single additional file, no new services
-2. **Reliability:** Health checks + auto-restart
-3. **Safety:** Multiple protection mechanisms
-4. **Observability:** Comprehensive logging
-5. **Maintainability:** Human-readable configuration
-6. **Performance:** Minimal overhead
+1. **Simplicity:** Modular code, minimal services, HTTP polling (no MQTT)
+2. **Reliability:** Health checks + auto-restart + proven stability
+3. **Safety:** Hysteresis, timing constraints, symmetric boundary control
+4. **Observability:** WebSocket monitoring, comprehensive logging, Prometheus metrics
+5. **Maintainability:** Modular code (<300 lines/file), human-readable configuration
+6. **Performance:** Minimal overhead (~210MB RAM, <1% CPU)
 
-The result is a production-ready thermostat system that's simple enough for a home deployment yet robust enough for reliable operation.
+The result is a production-ready system that's simple enough for home deployment yet robust enough for continuous operation (weeks+ proven uptime).

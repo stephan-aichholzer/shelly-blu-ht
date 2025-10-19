@@ -130,8 +130,10 @@ sensor_temperature_celsius{sensor_name="temp_indoor"}
   - Real-time logging of all control decisions
 
 - **Monitoring:**
-  - Live control loop monitoring scripts
-  - Historical decision review
+  - **Web-based live monitor** at `/monitor` - View control loop logs in real-time from any browser
+  - WebSocket streaming with 30-line history buffer
+  - Live control loop monitoring scripts (`watch_thermostat.sh`)
+  - Historical decision review (`show_thermostat_history.sh`)
   - Comprehensive logging with log rotation
   - API endpoint for current status
 
@@ -220,6 +222,22 @@ Settings are persisted in `./data/thermostat_config.json` and can be edited dire
 
 ## Monitoring
 
+### Web-Based Monitor (Recommended)
+Open in your browser:
+```
+http://<raspberry-pi-ip>:8001/monitor
+```
+
+Features:
+- Real-time control loop log streaming via WebSocket
+- Shows last 30 log entries on connect
+- Auto-reconnect on network issues
+- Color-coded log types (mode changes, decisions, errors)
+- Works on desktop, tablet, and mobile
+- No SSH required!
+
+### Command-Line Monitoring
+
 **Check sensor health:**
 ```bash
 ./check_sensors.sh
@@ -234,7 +252,7 @@ Shows:
 
 **Monitor thermostat control:**
 ```bash
-# Live monitoring
+# Live monitoring (terminal)
 ./watch_thermostat.sh
 
 # Historical review
@@ -251,7 +269,10 @@ docker logs -f iot-api  # Follow live
 ## API Endpoints
 
 ### Monitoring
+- `GET /` - API information and endpoint list
 - `GET /health` - Health check (includes thermostat status)
+- `GET /monitor` - **Web-based live monitor** (HTML page with WebSocket streaming)
+- `WS /ws/thermostat/logs` - WebSocket endpoint for live log streaming
 - `GET /api/v1/sensors` - List all sensors
 - `GET /api/v1/temperature` - Temperature readings
 - `GET /api/v1/humidity` - Humidity readings
