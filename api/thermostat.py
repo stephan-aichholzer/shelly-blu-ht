@@ -347,7 +347,11 @@ def calculate_control_decision(
             return False, f"Heating OFF: {current_temp:.1f}°C, will turn ON below {turn_on_threshold:.1f}°C (target {target_temp:.1f}°C - {hysteresis:.1f}°C hysteresis, idle {time_since_change:.0f}/{min_off_time}min)"
         else:
             # Want to turn OFF, check min_on_time
-            if time_since_change >= min_on_time:
+            # EXCEPTION: If target was manually reduced significantly below current temp,
+            # turn off immediately regardless of min_on_time to avoid overshooting the new target
+            if target_temp < current_temp - 0.2:
+                return False, f"Turning OFF immediately: target {target_temp:.1f}°C < {current_temp:.1f}°C - 0.2°C (manual target reduction detected, ignoring min_on_time)"
+            elif time_since_change >= min_on_time:
                 return False, f"Turning OFF: {current_temp:.1f}°C >= {turn_off_threshold:.1f}°C (target {target_temp:.1f}°C + {hysteresis:.1f}°C, ON for {time_since_change:.0f}min >= {min_on_time}min)"
             else:
                 remaining = min_on_time - time_since_change
