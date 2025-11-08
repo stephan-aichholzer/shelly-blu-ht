@@ -98,9 +98,22 @@ curl http://localhost:8001/metrics | grep sensor_temperature
 Point Prometheus at `http://localhost:8001/metrics` and use queries like:
 
 ```promql
+# Query by sensor name (recommended)
 sensor_temperature_celsius{sensor_name="temp_outdoor"}
 sensor_temperature_celsius{sensor_name="temp_indoor"}
+
+# Or by device_id (Shelly device ID: 200, 201, 202)
+sensor_temperature_celsius{device_id="200"}
+
+# Or by gateway_id (Shelly Pro 2 MAC address)
+sensor_temperature_celsius{gateway_id="shellypro2-8813bfddbfe8"}
 ```
+
+**Available labels:**
+- `device_id` - Shelly device ID (200, 201, 202)
+- `gateway_id` - Shelly Pro 2 gateway MAC address
+- `sensor_id` - BLE sensor MAC address
+- `sensor_name` - Human-readable name (temp_outdoor, temp_indoor, temp_buffer)
 
 ## Features
 
@@ -278,6 +291,12 @@ docker logs -f iot-api  # Follow live
 - `GET /api/v1/humidity` - Humidity readings
 - `GET /api/v1/battery` - Battery levels
 - `GET /metrics` - Prometheus metrics (includes thermostat metrics)
+
+**Sensor Prometheus Metrics:**
+- `sensor_temperature_celsius{device_id, gateway_id, sensor_id, sensor_name}` - Current temperature
+- `sensor_humidity_percent{device_id, gateway_id, sensor_id, sensor_name}` - Current humidity
+- `sensor_battery_percent{device_id, gateway_id, sensor_id, sensor_name}` - Battery level
+- `sensor_last_seen_timestamp{device_id, gateway_id, sensor_id, sensor_name}` - Last data timestamp
 
 **Thermostat Prometheus Metrics:**
 - `thermostat_switch_state` - Switch state (1=ON/heating, 0=OFF)

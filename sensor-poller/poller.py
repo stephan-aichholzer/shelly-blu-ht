@@ -128,6 +128,7 @@ class SensorPoller:
         """Write sensor data to InfluxDB"""
         points = []
         gateway_id = "shellypro2-8813bfddbfe8"
+        device_id = str(sensor_config["device_id"])  # Shelly device ID (200, 201, 202)
         sensor_id = sensor_config["mac"]
 
         # Temperature
@@ -135,6 +136,7 @@ class SensorPoller:
             points.append(
                 Point("temperature")
                 .tag("gateway_id", gateway_id)
+                .tag("device_id", device_id)
                 .tag("sensor_id", sensor_id)
                 .tag("sensor_type", "bthome")
                 .tag("sensor_name", sensor_config["name"])
@@ -147,6 +149,7 @@ class SensorPoller:
             points.append(
                 Point("humidity")
                 .tag("gateway_id", gateway_id)
+                .tag("device_id", device_id)
                 .tag("sensor_id", sensor_id)
                 .tag("sensor_type", "bthome")
                 .tag("sensor_name", sensor_config["name"])
@@ -159,6 +162,7 @@ class SensorPoller:
             points.append(
                 Point("battery")
                 .tag("gateway_id", gateway_id)
+                .tag("device_id", device_id)
                 .tag("sensor_id", sensor_id)
                 .tag("sensor_type", "bthome")
                 .tag("sensor_name", sensor_config["name"])

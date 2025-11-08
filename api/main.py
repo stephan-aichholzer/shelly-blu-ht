@@ -192,23 +192,25 @@ async def list_sensors():
     Queries the last 7 days of data to discover all active sensors.
     """
     try:
-        query = f'''
+        sensors = {}
+
+        # Query temperature and humidity (both use _field="value")
+        # Group by device_id, sensor_id, sensor_type, AND _measurement to get last of each measurement type
+        temp_humidity_query = f'''
         from(bucket: "{INFLUXDB_BUCKET}")
         |> range(start: -7d)
         |> filter(fn: (r) => r._measurement == "temperature" or r._measurement == "humidity")
-        |> group(columns: ["device_id", "sensor_id", "sensor_type"])
+        |> group(columns: ["device_id", "sensor_id", "sensor_type", "_measurement"])
         |> last()
         |> group()
         '''
 
-        result = query_api.query(query)
-        sensors = {}
-
+        result = query_api.query(temp_humidity_query)
         for table in result:
             for record in table.records:
-                device_id = record.values.get("device_id", "unknown")
+                device_id = record.values.get("device_id") or "unknown"
                 sensor_id = record.values.get("sensor_id")
-                sensor_type = record.values.get("sensor_type", "unknown")
+                sensor_type = record.values.get("sensor_type") or "unknown"
                 measurement = record.get_measurement()
 
                 key = (device_id, sensor_id)
@@ -224,7 +226,40 @@ async def list_sensors():
                 if measurement not in sensors[key]["measurements"]:
                     sensors[key]["measurements"].append(measurement)
 
-                # Update last seen if this record is newer
+                if record.get_time() > sensors[key]["last_seen"]:
+                    sensors[key]["last_seen"] = record.get_time()
+
+        # Query battery separately (uses _field="level")
+        battery_query = f'''
+        from(bucket: "{INFLUXDB_BUCKET}")
+        |> range(start: -7d)
+        |> filter(fn: (r) => r._measurement == "battery")
+        |> group(columns: ["device_id", "sensor_id", "sensor_type", "_measurement"])
+        |> last()
+        |> group()
+        '''
+
+        result = query_api.query(battery_query)
+        for table in result:
+            for record in table.records:
+                device_id = record.values.get("device_id") or "unknown"
+                sensor_id = record.values.get("sensor_id")
+                sensor_type = record.values.get("sensor_type") or "unknown"
+                measurement = record.get_measurement()
+
+                key = (device_id, sensor_id)
+                if key not in sensors:
+                    sensors[key] = {
+                        "device_id": device_id,
+                        "sensor_id": sensor_id,
+                        "sensor_type": sensor_type,
+                        "last_seen": record.get_time(),
+                        "measurements": []
+                    }
+
+                if measurement not in sensors[key]["measurements"]:
+                    sensors[key]["measurements"].append(measurement)
+
                 if record.get_time() > sensors[key]["last_seen"]:
                     sensors[key]["last_seen"] = record.get_time()
 
@@ -338,7 +373,7 @@ async def get_sensor_data(
             for record in table.records:
                 reading = SensorReading(
                     timestamp=record.get_time(),
-                    device_id=record.values.get("device_id", "unknown"),
+                    device_id=record.values.get("device_id") or "unknown",
                     sensor_id=record.values.get("sensor_id"),
                     value=record.get_value(),
                     unit=unit_map.get(measurement, "unknown")
@@ -346,28 +381,47 @@ async def get_sensor_data(
                 readings.append(reading)
 
         # Update Prometheus metrics with latest values
-        if readings:
-            latest = readings[0]  # Most recent due to desc sort
-            if measurement == "temperature":
-                SENSOR_TEMPERATURE.labels(
-                    device_id=latest.device_id,
-                    sensor_id=latest.sensor_id or "unknown"
-                ).set(latest.value)
-            elif measurement == "humidity":
-                SENSOR_HUMIDITY.labels(
-                    device_id=latest.device_id,
-                    sensor_id=latest.sensor_id or "unknown"
-                ).set(latest.value)
-            elif measurement == "battery":
-                SENSOR_BATTERY.labels(
-                    device_id=latest.device_id,
-                    sensor_id=latest.sensor_id or "unknown"
-                ).set(latest.value)
+        if readings and result:
+            # Get latest record's metadata for Prometheus labels
+            latest_record = None
+            for table in result:
+                if table.records:
+                    latest_record = table.records[0]
+                    break
 
-            SENSOR_LAST_SEEN.labels(
-                device_id=latest.device_id,
-                sensor_id=latest.sensor_id or "unknown"
-            ).set(latest.timestamp.timestamp())
+            if latest_record:
+                latest = readings[0]  # Most recent due to desc sort
+                gateway_id = latest_record.values.get("gateway_id") or "unknown"
+                sensor_name = latest_record.values.get("sensor_name") or "unknown"
+
+                if measurement == "temperature":
+                    SENSOR_TEMPERATURE.labels(
+                        device_id=latest.device_id,
+                        gateway_id=gateway_id,
+                        sensor_id=latest.sensor_id or "unknown",
+                        sensor_name=sensor_name
+                    ).set(latest.value)
+                elif measurement == "humidity":
+                    SENSOR_HUMIDITY.labels(
+                        device_id=latest.device_id,
+                        gateway_id=gateway_id,
+                        sensor_id=latest.sensor_id or "unknown",
+                        sensor_name=sensor_name
+                    ).set(latest.value)
+                elif measurement == "battery":
+                    SENSOR_BATTERY.labels(
+                        device_id=latest.device_id,
+                        gateway_id=gateway_id,
+                        sensor_id=latest.sensor_id or "unknown",
+                        sensor_name=sensor_name
+                    ).set(latest.value)
+
+                SENSOR_LAST_SEEN.labels(
+                    device_id=latest.device_id,
+                    gateway_id=gateway_id,
+                    sensor_id=latest.sensor_id or "unknown",
+                    sensor_name=sensor_name
+                ).set(latest.timestamp.timestamp())
 
         return readings
 
@@ -396,7 +450,7 @@ async def get_latest_readings():
             from(bucket: "{INFLUXDB_BUCKET}")
             |> range(start: -1h)
             |> filter(fn: (r) => r._measurement == "{measurement}")
-            |> group(columns: ["gateway_id", "sensor_id"])
+            |> group(columns: ["device_id", "sensor_id"])
             |> last()
             '''
 
@@ -404,15 +458,17 @@ async def get_latest_readings():
 
             for table in result:
                 for record in table.records:
+                    device_id = record.values.get("device_id") or "unknown"
                     gateway_id = record.values.get("gateway_id", "unknown")
                     sensor_id = record.values.get("sensor_id", "unknown")
                     sensor_name = record.values.get("sensor_name", "unknown")
                     value = record.get_value()
                     timestamp = record.get_time()
 
-                    key = (gateway_id, sensor_id)
+                    key = (device_id, sensor_id)
                     if key not in latest_readings:
                         latest_readings[key] = {
+                            "device_id": device_id,
                             "gateway_id": gateway_id,
                             "sensor_id": sensor_id,
                             "sensor_name": sensor_name,

@@ -18,28 +18,30 @@ REQUEST_DURATION = Histogram(
 )
 
 # Sensor Metrics
+# Note: device_id = Shelly device ID (200, 201, 202)
+#       gateway_id = Shelly Pro 2 MAC address (shellypro2-8813bfddbfe8)
 SENSOR_TEMPERATURE = Gauge(
     'sensor_temperature_celsius',
     'Current temperature',
-    ['device_id', 'sensor_id', 'sensor_name']
+    ['device_id', 'gateway_id', 'sensor_id', 'sensor_name']
 )
 
 SENSOR_HUMIDITY = Gauge(
     'sensor_humidity_percent',
     'Current humidity',
-    ['device_id', 'sensor_id', 'sensor_name']
+    ['device_id', 'gateway_id', 'sensor_id', 'sensor_name']
 )
 
 SENSOR_BATTERY = Gauge(
     'sensor_battery_percent',
     'Current battery level',
-    ['device_id', 'sensor_id', 'sensor_name']
+    ['device_id', 'gateway_id', 'sensor_id', 'sensor_name']
 )
 
 SENSOR_LAST_SEEN = Gauge(
     'sensor_last_seen_timestamp',
     'Last seen timestamp',
-    ['device_id', 'sensor_id', 'sensor_name']
+    ['device_id', 'gateway_id', 'sensor_id', 'sensor_name']
 )
 
 # Thermostat Metrics

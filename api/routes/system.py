@@ -148,13 +148,15 @@ async def update_prometheus_metrics():
 
         for table in temp_result:
             for record in table.records:
+                device_id = record.values.get("device_id") or "unknown"
                 gateway_id = record.values.get("gateway_id", "unknown")
                 sensor_id = record.values.get("sensor_id", "unknown")
                 sensor_name = record.values.get("sensor_name", "unknown")
                 value = record.get_value()
 
                 SENSOR_TEMPERATURE.labels(
-                    device_id=gateway_id,
+                    device_id=device_id,
+                    gateway_id=gateway_id,
                     sensor_id=sensor_id,
                     sensor_name=sensor_name
                 ).set(value)
@@ -172,13 +174,15 @@ async def update_prometheus_metrics():
 
         for table in humidity_result:
             for record in table.records:
+                device_id = record.values.get("device_id") or "unknown"
                 gateway_id = record.values.get("gateway_id", "unknown")
                 sensor_id = record.values.get("sensor_id", "unknown")
                 sensor_name = record.values.get("sensor_name", "unknown")
                 value = record.get_value()
 
                 SENSOR_HUMIDITY.labels(
-                    device_id=gateway_id,
+                    device_id=device_id,
+                    gateway_id=gateway_id,
                     sensor_id=sensor_id,
                     sensor_name=sensor_name
                 ).set(value)
@@ -196,6 +200,7 @@ async def update_prometheus_metrics():
 
         for table in battery_result:
             for record in table.records:
+                device_id = record.values.get("device_id") or "unknown"
                 gateway_id = record.values.get("gateway_id", "unknown")
                 sensor_id = record.values.get("sensor_id", "unknown")
                 sensor_name = record.values.get("sensor_name", "unknown")
@@ -203,13 +208,15 @@ async def update_prometheus_metrics():
                 timestamp = record.get_time().timestamp()
 
                 SENSOR_BATTERY.labels(
-                    device_id=gateway_id,
+                    device_id=device_id,
+                    gateway_id=gateway_id,
                     sensor_id=sensor_id,
                     sensor_name=sensor_name
                 ).set(value)
 
                 SENSOR_LAST_SEEN.labels(
-                    device_id=gateway_id,
+                    device_id=device_id,
+                    gateway_id=gateway_id,
                     sensor_id=sensor_id,
                     sensor_name=sensor_name
                 ).set(timestamp)

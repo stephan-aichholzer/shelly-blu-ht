@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### 🔧 Enhanced Data Model & Metrics Consistency
+
+**Added `device_id` tag throughout the system for better data organization and Grafana compatibility.**
+
+### Added
+- **InfluxDB Schema Enhancement**:
+  - Added `device_id` tag (Shelly device ID: 200, 201, 202) to all measurements
+  - Complements existing `gateway_id` (Shelly Pro 2 MAC) and `sensor_id` (BLE MAC)
+  - Enables filtering and grouping by individual sensor devices
+
+- **Prometheus Metrics Enhancement**:
+  - Added `device_id` label to all sensor metrics
+  - Kept `gateway_id` label for backward compatibility with existing Grafana dashboards
+  - All sensor metrics now have 4 labels: `device_id`, `gateway_id`, `sensor_id`, `sensor_name`
+  - Existing Grafana queries continue to work unchanged
+
+- **API Consistency**:
+  - `/api/v1/sensors` now returns proper `device_id` field
+  - `/api/v1/latest` includes both `device_id` and `gateway_id`
+  - `/api/v1/temperature|humidity|battery` include `device_id`
+  - All endpoints properly handle legacy data (null `device_id` → "unknown")
+
+### Changed
+- **sensor-poller**: Now writes `device_id` tag to InfluxDB for all measurements
+- **Measurement queries**: Split temperature/humidity and battery queries (different field types)
+- **Documentation**: Updated README.md with available Prometheus labels and query examples
+
+### Fixed
+- **Schema collision bug**: Battery measurement uses `_field="level"` (int) while temp/humidity use `_field="value"` (float) - now queried separately
+- **Measurement grouping**: Added `_measurement` to group columns to get last value of each type
+- **Null handling**: Proper `device_id or "unknown"` pattern for backward compatibility with old data
+
+### Migration Notes
+- **No breaking changes** - All existing API consumers and Grafana dashboards continue to work
+- **New data** (after update) includes `device_id` tag
+- **Old data** (before update) shows `device_id="unknown"` - will age out naturally
+- **Grafana users**: Can now query by `device_id="200"` in addition to existing `gateway_id` queries
+
 ## [5.0.0] - 2025-10-10
 
 ### 🏗️ Modular Architecture & WebSocket Monitoring
