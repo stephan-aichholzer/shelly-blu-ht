@@ -71,3 +71,8 @@ services:
 volumes:
   influxdb-data:
   influxdb-config:
+
+networks:
+  default:
+    name: shelly_bt_temp_default
+    driver: bridge
