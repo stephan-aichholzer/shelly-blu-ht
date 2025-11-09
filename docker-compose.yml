@@ -1,5 +1,12 @@
 version: '3.8'
 
+# ==============================================================================
+# Network Configuration Variables
+# ==============================================================================
+# SHELLY_GATEWAY_IP: IP address of Shelly Pro 2 gateway (BLE sensor gateway + relay switch)
+# HOST_IP: IP address of this Raspberry Pi host running Docker services
+# ==============================================================================
+
 services:
   # Time Series Database
   influxdb:
@@ -34,7 +41,8 @@ services:
       - INFLUXDB_TOKEN=iot-admin-token-12345
       - INFLUXDB_ORG=iot-org
       - INFLUXDB_BUCKET=sensor-data
-      - SHELLY_IP=192.168.2.12
+      # Shelly Pro 2 gateway IP (192.168.2.12) - BLE sensor gateway and relay switch controller
+      - SHELLY_IP=${SHELLY_GATEWAY_IP:-192.168.2.12}
       - SWITCH_ID=0
       - THERMOSTAT_CONFIG_FILE=/data/thermostat_config.json
     volumes:
@@ -55,13 +63,16 @@ services:
     depends_on:
       - influxdb
     environment:
-      - SHELLY_IP=192.168.2.12
-      - INFLUXDB_URL=http://192.168.2.11:8086
+      # Shelly Pro 2 gateway IP (192.168.2.12) - provides HTTP API access to BLE sensors
+      - SHELLY_IP=${SHELLY_GATEWAY_IP:-192.168.2.12}
+      # Raspberry Pi host IP (192.168.2.11) - where InfluxDB is exposed on host network
+      # Note: sensor-poller uses host network mode, so it accesses InfluxDB via host IP
+      - INFLUXDB_URL=http://${HOST_IP:-192.168.2.11}:8086
       - INFLUXDB_TOKEN=iot-admin-token-12345
       - INFLUXDB_ORG=iot-org
       - INFLUXDB_BUCKET=sensor-data
       - POLL_INTERVAL=30
-    network_mode: host  # Needed to access Shelly on local network
+    network_mode: host  # Required for direct access to Shelly BLE gateway on local network
     logging:
       driver: "json-file"
       options:
