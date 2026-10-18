@@ -2,7 +2,7 @@
   "config": {
     "target_temp": 22.0,
     "eco_temp": 18.0,
-    "mode": "OFF",
+    "mode": "ON",
     "hysteresis": 0.1,
     "min_on_time": 40,
     "min_off_time": 10,
@@ -10,8 +10,8 @@
     "control_interval": 60
   },
   "state": {
-    "switch_on": false,
-    "last_switch_change": "2026-06-11T11:36:04.597596",
-    "last_control_decision": "Manual mode: OFF"
+    "switch_on": true,
+    "last_switch_change": "2026-10-18T16:35:57.441182",
+    "last_control_decision": "Temperature 22.0\u00b0C in deadband (21.9\u00b0C - 22.1\u00b0C), maintaining ON (running 150/40min)"
   }
 }

@@ -46,6 +46,10 @@ services:
       - THERMOSTAT_CONFIG_FILE=/data/thermostat_config.json
     volumes:
       - ./data:/data
+      # Mount the app source so code changes need a restart, not a rebuild
+      # (rebuilding would pull newer base images than the transplanted one)
+      - ./api/main.py:/app/main.py:ro
+      - ./api/thermostat.py:/app/thermostat.py:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"  # Allows container to reach host network for Shelly
     logging:

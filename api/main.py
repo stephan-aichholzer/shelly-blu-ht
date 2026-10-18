@@ -875,30 +875,8 @@ async def thermostat_control_loop():
                 control_loop_state["last_mode"] = config.mode
                 control_loop_state["mode_action_done"] = False  # Reset flag on mode change
 
-            # Handle ON mode - turn switch ON once, then just monitor
-            if config.mode == ThermostatMode.ON:
-                switch_status = shelly_controller.get_switch_status()
-                current_switch_on = switch_status.get("output", False)
-
-                if not control_loop_state["mode_action_done"]:
-                    logger.info("Entering ON mode - turning switch ON once")
-                    try:
-                        result = shelly_controller.set_switch(True)
-                        await asyncio.sleep(0.2)
-                        verify_status = shelly_controller.get_switch_status()
-                        if verify_status.get("output") is True:
-                            thermostat_manager.update_state(True, "Manual mode: ON")
-                            THERMOSTAT_SWITCH_STATE.set(1)
-                            control_loop_state["mode_action_done"] = True
-                            logger.info("Switch successfully set to ON")
-                    except Exception as e:
-                        logger.error(f"Error forcing switch ON: {e}")
-                else:
-                    # Just monitor and log
-                    logger.info(f"Mode=ON, Switch={'ON' if current_switch_on else 'OFF'} - no action (manual mode)")
-
             # Handle OFF mode - turn switch OFF once, then just monitor
-            elif config.mode == ThermostatMode.OFF:
+            if config.mode == ThermostatMode.OFF:
                 switch_status = shelly_controller.get_switch_status()
                 current_switch_on = switch_status.get("output", False)
 
@@ -922,7 +900,7 @@ async def thermostat_control_loop():
                     else:
                         logger.info(f"Mode=OFF, Switch=OFF - no action (manual mode)")
 
-            elif config.mode in [ThermostatMode.AUTO, ThermostatMode.ECO]:
+            elif config.mode in [ThermostatMode.AUTO, ThermostatMode.ON, ThermostatMode.ECO]:
                 # Get last N temperature samples and average them for slow-responding systems
                 sample_count = config.temp_sample_count
                 temp_query = f'''
@@ -957,8 +935,11 @@ async def thermostat_control_loop():
                     control_loop_state["last_error"] = None
                     control_loop_state["consecutive_errors"] = 0
 
-                    # Determine target temperature
-                    target = config.target_temp if config.mode == ThermostatMode.AUTO else config.eco_temp
+                    # Determine target temperature. AUTO and ON both regulate on
+                    # target_temp (AUTO's comes from the schedule, ON's is set by
+                    # hand); ECO regulates on eco_temp. All three use the same
+                    # hysteresis and min on/off times.
+                    target = config.eco_temp if config.mode == ThermostatMode.ECO else config.target_temp
 
                     # Update target temperature metric
                     THERMOSTAT_TARGET_TEMP.set(target)
