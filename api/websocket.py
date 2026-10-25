@@ -7,6 +7,8 @@ from collections import deque
 from fastapi import WebSocket
 import logging
 
+from thermostat import now_local
+
 logger = logging.getLogger(__name__)
 
 
@@ -19,8 +21,6 @@ class WebSocketManager:
 
     async def connect(self, websocket: WebSocket):
         """Accept and register a new WebSocket connection and send history"""
-        from datetime import datetime
-
         await websocket.accept()
         self.active_connections.append(websocket)
         logger.info(f"WebSocket client connected. Total clients: {len(self.active_connections)}")
@@ -28,7 +28,7 @@ class WebSocketManager:
         # Send connection message first
         try:
             await websocket.send_text(
-                f"{datetime.utcnow().isoformat()}Z - Connected - showing last {len(self.log_history)} log entries..."
+                f"{now_local().isoformat()} - Connected - showing last {len(self.log_history)} log entries..."
             )
         except Exception as e:
             logger.error(f"Error sending connection message: {e}")

@@ -7,7 +7,7 @@ Handles thermostat configuration, state management, and switch control
 import os
 import json
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 from enum import Enum
 from pathlib import Path
@@ -29,6 +29,25 @@ class ThermostatMode(str, Enum):
 
 
 # Data models
+
+def now_local() -> datetime:
+    """Timezone-aware 'now' in the container's local zone (TZ=Europe/Vienna)."""
+    return datetime.now().astimezone()
+
+
+def as_aware(dt: Optional[datetime]) -> Optional[datetime]:
+    """
+    Make a datetime comparable with now_local().
+
+    Timestamps written before this change were naive UTC, so a naive value read
+    back from thermostat_config.json is interpreted as UTC. Without this, mixing
+    it with an aware 'now' raises TypeError inside the control loop.
+    """
+    if dt is None or dt.tzinfo is not None:
+        return dt
+    return dt.replace(tzinfo=timezone.utc)
+
+
 class ThermostatConfig(BaseModel):
     target_temp: float = Field(
         22.0,
@@ -249,7 +268,7 @@ class ThermostatManager:
 
         # Check if switch state changed
         if switch_on != self.state.switch_on:
-            self.state.last_switch_change = datetime.utcnow()
+            self.state.last_switch_change = now_local()
             self.state.switch_on = switch_on
             changed = True
 
@@ -307,7 +326,8 @@ def calculate_control_decision(
 
     Returns: (should_be_on, reason)
     """
-    now = datetime.utcnow()
+    now = now_local()
+    last_switch_change = as_aware(last_switch_change)
 
     # Calculate time since last switch change
     if last_switch_change:

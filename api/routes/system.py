@@ -9,6 +9,7 @@ from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
 from config import API_VERSION, INFLUXDB_BUCKET, INFLUXDB_ORG
 from models import HealthStatus
+from thermostat import now_local, as_aware
 from database import influx_client, query_api
 from metrics import (
     SENSOR_TEMPERATURE, SENSOR_HUMIDITY, SENSOR_BATTERY,
@@ -74,13 +75,14 @@ async def health_check():
         pass
 
     # Check control loop health
-    now = datetime.utcnow()
+    now = now_local()
     control_loop_healthy = True
     control_loop_running = control_loop_state.get("running", False)
     last_run = control_loop_state.get("last_run")
     error = control_loop_state.get("last_error")
 
     # Control loop should run at least every 6 minutes (3min interval + 3min grace)
+    last_run = as_aware(last_run)
     if last_run and (now - last_run).total_seconds() > 360:
         control_loop_healthy = False
 

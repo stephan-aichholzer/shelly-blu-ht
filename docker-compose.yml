@@ -21,6 +21,7 @@ services:
       - DOCKER_INFLUXDB_INIT_BUCKET=sensor-data
       - DOCKER_INFLUXDB_INIT_RETENTION=180d
       - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=iot-admin-token-12345
+      - TZ=${TZ:-Europe/Vienna}
     volumes:
       - influxdb-data:/var/lib/influxdb2
       - influxdb-config:/etc/influxdb2
@@ -44,12 +45,14 @@ services:
       - SHELLY_IP=${SHELLY_GATEWAY_IP:-192.168.2.12}
       - SWITCH_ID=0
       - THERMOSTAT_CONFIG_FILE=/data/thermostat_config.json
+      - TZ=${TZ:-Europe/Vienna}
     volumes:
       - ./data:/data
       # Mount the app source so code changes need a restart, not a rebuild
       # (rebuilding would pull newer base images than the transplanted one)
       - ./api/main.py:/app/main.py:ro
       - ./api/thermostat.py:/app/thermostat.py:ro
+      - ./api/routes:/app/routes:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"  # Allows container to reach host network for Shelly
     logging:
@@ -77,6 +80,7 @@ services:
       - INFLUXDB_ORG=iot-org
       - INFLUXDB_BUCKET=sensor-data
       - POLL_INTERVAL=30
+      - TZ=${TZ:-Europe/Vienna}
     network_mode: host  # Required for direct access to Shelly BLE gateway on local network
     logging:
       driver: "json-file"

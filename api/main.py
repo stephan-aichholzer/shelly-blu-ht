@@ -24,7 +24,10 @@ from websocket import ws_manager
 from routes import system, monitor
 
 # Setup logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(name)s: %(message)s',
+)
 logger = logging.getLogger(__name__)
 
 tags_metadata = [
@@ -493,7 +496,8 @@ async def get_latest_readings():
 
 from thermostat import (
     ThermostatConfig, ThermostatStatus, ThermostatMode,
-    thermostat_manager, shelly_controller, calculate_control_decision
+    thermostat_manager, shelly_controller, calculate_control_decision,
+    now_local, as_aware
 )
 
 @app.get(
@@ -758,7 +762,7 @@ async def get_thermostat_status():
                 else:
                     unlock_time = state.last_switch_change + timedelta(minutes=config.min_off_time)
 
-                if unlock_time > datetime.utcnow():
+                if as_aware(unlock_time) > now_local():
                     switch_locked_until = unlock_time
         elif config.mode == ThermostatMode.ON:
             reason = "Manual override: Switch forced ON"
@@ -862,7 +866,7 @@ async def thermostat_control_loop():
 
     while True:
         try:
-            control_loop_state["last_run"] = datetime.utcnow()
+            control_loop_state["last_run"] = now_local()
 
             # Get current configuration
             config = thermostat_manager.get_config()
@@ -871,7 +875,7 @@ async def thermostat_control_loop():
             if control_loop_state["last_mode"] != config.mode:
                 log_msg = f"Mode changed to {config.mode.value}"
                 logger.info(log_msg)
-                await ws_manager.broadcast(f"{datetime.utcnow().isoformat()}Z - {log_msg}")
+                await ws_manager.broadcast(f"{now_local().isoformat()} - {log_msg}")
                 control_loop_state["last_mode"] = config.mode
                 control_loop_state["mode_action_done"] = False  # Reset flag on mode change
 
@@ -963,13 +967,13 @@ async def thermostat_control_loop():
 
                     log_msg = f"Mode={config.mode.value}, Temp={indoor_temp:.1f}°C, Control decision: {reason}"
                     logger.info(log_msg)
-                    await ws_manager.broadcast(f"{datetime.utcnow().isoformat()}Z - {log_msg}")
+                    await ws_manager.broadcast(f"{now_local().isoformat()} - {log_msg}")
 
                     # Execute switch control if state should change
                     if should_be_on != current_switch_on:
                         log_msg = f"Changing switch state: {current_switch_on} -> {should_be_on}"
                         logger.info(log_msg)
-                        await ws_manager.broadcast(f"{datetime.utcnow().isoformat()}Z - {log_msg}")
+                        await ws_manager.broadcast(f"{now_local().isoformat()} - {log_msg}")
                         result = shelly_controller.set_switch(should_be_on)
 
                         # Small delay to let switch settle (race condition fix)
@@ -985,7 +989,7 @@ async def thermostat_control_loop():
                             thermostat_manager.update_state(should_be_on, reason)
                             log_msg = f"Switch successfully set to {'ON' if should_be_on else 'OFF'}"
                             logger.info(log_msg)
-                            await ws_manager.broadcast(f"{datetime.utcnow().isoformat()}Z - {log_msg}")
+                            await ws_manager.broadcast(f"{now_local().isoformat()} - {log_msg}")
                             THERMOSTAT_SWITCH_STATE.set(1 if should_be_on else 0)
                         else:
                             logger.error(f"Switch state mismatch after command: expected {should_be_on}, got {actual_state}")
